@@ -6,12 +6,12 @@
   };
 
   let customPredictor = null;
-  const DEFAULT_BACKEND_PATH = "/predict_batch";
+  const DEFAULT_BACKEND_PATH = "/api/predict_batch";
 
   function resolveDefaultBackendUrl() {
     const host = window.location?.hostname || "";
     if (host === "localhost" || host === "127.0.0.1") {
-      return `http://127.0.0.1:8000${DEFAULT_BACKEND_PATH}`;
+      return "http://127.0.0.1:8000/predict_batch";
     }
     return `${window.location.origin}${DEFAULT_BACKEND_PATH}`;
   }
