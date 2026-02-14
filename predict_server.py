@@ -201,11 +201,20 @@ class SklearnModelAdapter:
     feature_names: Sequence[str]
 
     def _feature_value(self, feature_name: str, tile: Dict[str, Any], day: int) -> float:
+        name = feature_name.lower()
+
+        # 1) Use real feature directly if caller provided it
+        if name in tile and tile[name] is not None:
+            try:
+                return float(tile[name])
+            except (TypeError, ValueError):
+                pass
+
+        # 2) Backward-compatible fallback (existing synthetic behavior)
         lat = float(tile.get("lat", 0.0) or 0.0)
         lng = float(tile.get("lng", 0.0) or 0.0)
         tile_id = str(tile.get("id", ""))
 
-        name = feature_name.lower()
         base = _hash_unit(self.model_name, name, tile_id, day, round(lat, 3), round(lng, 3))
 
         if name == "slope":
@@ -227,6 +236,7 @@ class SklearnModelAdapter:
             return max(0.0, min(1.0, 0.25 + 0.55 * math.sin(day * 0.7 + lng * 0.03) + (base - 0.5) * 0.2))
 
         return base
+
 
     def predict_tile_records(self, tiles: Sequence[Dict[str, Any]], day: int) -> List[float]:
         rows: List[List[float]] = []
@@ -445,18 +455,26 @@ def create_app(models_dir: Path | str = "models"):
             if isinstance(item, str):
                 tiles.append({"id": item})
                 continue
+
             if isinstance(item, dict):
                 tile_id = str(item.get("id") or f"tile-{idx}")
-                tiles.append(
-                    {
-                        "id": tile_id,
-                        "lat": float(item.get("lat", 0.0) or 0.0),
-                        "lng": float(item.get("lng", 0.0) or 0.0),
-                        "bbox": item.get("bbox"),
-                    }
-                )
+                tile: Dict[str, Any] = {
+                    "id": tile_id,
+                    "lat": float(item.get("lat", 0.0) or 0.0),
+                    "lng": float(item.get("lng", 0.0) or 0.0),
+                    "bbox": item.get("bbox"),
+                }
+
+                # Preserve any real model features sent by client
+                for key in ("slope", "aspect", "roads", "landcover", "ndvi", "ndmi", "lst", "weather"):
+                    if key in item:
+                        tile[key] = item.get(key)
+
+                tiles.append(tile)
                 continue
+
             return _error_response("tiles entries must be strings or objects")
+
 
         try:
             day = parse_day(payload.get("day", DAY_MIN))
