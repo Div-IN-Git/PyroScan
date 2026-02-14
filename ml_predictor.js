@@ -38,12 +38,30 @@
     if (text.includes("YOUR_BACKEND_DOMAIN")) {
       throw new Error("Replace YOUR_BACKEND_DOMAIN with a real backend URL.");
     }
+    // Auto-migrate older same-origin `/predict_batch` config to `/api/predict_batch`
+    // so users with stale localStorage values do not get repeated 404s in production.
+    try {
+      const parsed = new URL(text, window.location.origin);
+      const sameOrigin = parsed.origin === window.location.origin;
+      const isLocal = window.location?.hostname === "localhost" || window.location?.hostname === "127.0.0.1";
+      if (!isLocal && sameOrigin && parsed.pathname === "/predict_batch") {
+        parsed.pathname = DEFAULT_BACKEND_PATH;
+        return parsed.toString();
+      }
+    } catch (_) {
+      // Keep raw text when URL parsing fails.
+    }
+
     return text;
   }
 
   const persistedBackendUrl = readStorage("pyroscan.backendUrl");
   let backendUrl = normalizeBackendUrl(window.__PYROSCAN_BACKEND_URL || persistedBackendUrl || resolveDefaultBackendUrl());
   let backendModel = String(window.__PYROSCAN_BACKEND_MODEL || readStorage("pyroscan.backendModel") || "fire_risk_model").trim() || "fire_risk_model";
+
+  if (persistedBackendUrl && persistedBackendUrl !== backendUrl) {
+    writeStorage("pyroscan.backendUrl", backendUrl);
+  }
 
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
