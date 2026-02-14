@@ -6,6 +6,44 @@
   };
 
   let customPredictor = null;
+  const DEFAULT_BACKEND_PATH = "/predict_batch";
+
+  function resolveDefaultBackendUrl() {
+    const host = window.location?.hostname || "";
+    if (host === "localhost" || host === "127.0.0.1") {
+      return `http://127.0.0.1:8000${DEFAULT_BACKEND_PATH}`;
+    }
+    return `${window.location.origin}${DEFAULT_BACKEND_PATH}`;
+  }
+
+  function readStorage(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function writeStorage(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (_) {
+      // no-op when storage is unavailable
+    }
+  }
+
+  function normalizeBackendUrl(value) {
+    const text = String(value || "").trim();
+    if (!text) return resolveDefaultBackendUrl();
+    if (text.includes("YOUR_BACKEND_DOMAIN")) {
+      throw new Error("Replace YOUR_BACKEND_DOMAIN with a real backend URL.");
+    }
+    return text;
+  }
+
+  const persistedBackendUrl = readStorage("pyroscan.backendUrl");
+  let backendUrl = normalizeBackendUrl(window.__PYROSCAN_BACKEND_URL || persistedBackendUrl || resolveDefaultBackendUrl());
+  let backendModel = String(window.__PYROSCAN_BACKEND_MODEL || readStorage("pyroscan.backendModel") || "fire_risk_model").trim() || "fire_risk_model";
 
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
@@ -76,8 +114,51 @@
   }
 
   async function predictTiles(region, day, tiles) {
-    const predictor = typeof customPredictor === "function" ? customPredictor : fakePredictTiles;
+    const predictor = typeof customPredictor === "function" ? customPredictor : backendPredictTiles;
     return predictor(region, day, tiles);
+  }
+
+  async function backendPredictTiles(region, day, tiles) {
+    const normalizedTiles = normalizeTiles(tiles).map((tile) => ({
+      id: tile.id,
+      lat: tile.lat,
+      lng: tile.lng,
+    }));
+
+    const response = await fetch(backendUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        day: parseDay(day),
+        model: backendModel,
+        region: String(region?.id || "region"),
+        tiles: normalizedTiles,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Backend predictor failed (${response.status})`);
+    }
+
+    const payload = await response.json();
+    const results = Array.isArray(payload?.results) ? payload.results : [];
+    if (!results.length) {
+      throw new Error("Backend predictor returned no results.");
+    }
+
+    const values = new Map();
+    results.forEach((row) => {
+      const id = String(row?.tile ?? "");
+      const confidence = Number(row?.confidence);
+      if (id && Number.isFinite(confidence)) {
+        values.set(id, clamp(confidence, 0, 1));
+      }
+    });
+
+    if (values.size !== normalizedTiles.length) {
+      throw new Error("Backend predictor payload missing tile confidences.");
+    }
+    return values;
   }
 
   function setPredictor(predictor) {
@@ -99,6 +180,14 @@
     if (options.maxLatencyMs != null) {
       config.maxLatencyMs = Math.max(config.minLatencyMs, Number(options.maxLatencyMs) || config.minLatencyMs);
     }
+    if (typeof options.backendUrl === "string" && options.backendUrl.trim()) {
+      backendUrl = normalizeBackendUrl(options.backendUrl);
+      writeStorage("pyroscan.backendUrl", backendUrl);
+    }
+    if (typeof options.backendModel === "string" && options.backendModel.trim()) {
+      backendModel = options.backendModel.trim();
+      writeStorage("pyroscan.backendModel", backendModel);
+    }
     return getConfig();
   }
 
@@ -107,6 +196,8 @@
       failRate: config.failRate,
       minLatencyMs: config.minLatencyMs,
       maxLatencyMs: config.maxLatencyMs,
+      backendUrl,
+      backendModel,
       usingCustomPredictor: typeof customPredictor === "function",
     };
   }
