@@ -464,46 +464,11 @@ function buildDaySignals(region, dayIndex, riskAvg) {
   };
 }
 
-function deterministicFallbackTileValue(region, dayIndex, tileMeta) {
-  const seed = hashString(`${region.id}|${dayIndex}|${tileMeta.id}`);
-  const rng = makeRng(seed);
-  const lat = Number(tileMeta.lat || 0);
-  const lng = Number(tileMeta.lng || 0);
-  const factor = dayFactor(region, dayIndex);
-  const hotspot = hotspotBoost(lat, lng, region.hotspots);
-
-  const thermal = clamp(
-    0.86 + Math.sin((dayIndex + 1) * 0.55 + lat * 0.06) * 0.1 + rng() * 0.05,
-    0.72,
-    1.25
-  );
-  const vegetation = clamp(
-    0.85 + Math.cos((dayIndex + 2) * 0.41 + lng * 0.04) * 0.11 + rng() * 0.04,
-    0.7,
-    1.25
-  );
-  const wind = clamp(
-    0.82 + Math.sin((dayIndex + 3) * 0.63 + (lat - lng) * 0.02) * 0.12 + rng() * 0.06,
-    0.68,
-    1.35
-  );
-  const human = clamp(
-    0.84 + Math.cos((dayIndex + 4) * 0.27 + (lat + lng) * 0.03) * 0.09 + rng() * 0.05,
-    0.7,
-    1.25
-  );
-  const noise = (rng() - 0.5) * 0.05;
-
-  let value = region.baseRisk * factor * thermal * vegetation * wind * human;
-  value += hotspot * 0.32 + noise;
-  return clamp(value, 0, 1);
-}
-
 function recalculateDayStats(region, dayIndex, dayData) {
   let riskSum = 0;
   let highCount = 0;
   dayData.tiles.forEach((tile) => {
-    const value = clamp(Number(tile.value) || 0, 0, 1);
+    const value = tile.value == null ? 0 : clamp(Number(tile.value) || 0, 0, 1);
     tile.value = value;
     riskSum += value;
     if (value > 0.75) highCount += 1;
@@ -574,7 +539,8 @@ function tilePredictorInput(tile) {
 
 async function enrichDayWithPredictor(region, dayIndex, dayData) {
   if (typeof window.predictTiles !== "function") {
-    dayData.mlSource = "fallback";
+    dayData.mlSource = "unavailable";
+    dayData.mlError = "Predictor unavailable.";
     return;
   }
 
@@ -596,7 +562,7 @@ async function enrichDayWithPredictor(region, dayIndex, dayData) {
     dayData.mlSource = "ml";
     dayData.mlError = null;
   } catch (error) {
-    dayData.mlSource = "fallback";
+    dayData.mlSource = "unavailable";
     dayData.mlError = String(error?.message || error);
   }
 
@@ -640,11 +606,7 @@ function generateRegionDay(region, dayIndex) {
           [tileMinLat, tileMinLng],
           [tileMaxLat, tileMaxLng],
         ],
-        value: deterministicFallbackTileValue(region, dayIndex, {
-          id,
-          lat: centerLat,
-          lng: centerLng,
-        }),
+        value: null,
       });
     }
   }
@@ -656,7 +618,7 @@ function generateRegionDay(region, dayIndex) {
     const col = clamp(Math.floor((lng - minLng) / lngStep), 0, cols - 1);
     const tile = tiles[row * cols + col];
     const jitter = (rng() - 0.5) * 0.08;
-    const intensity = clamp((tile?.value || region.baseRisk) + jitter, 0, 1);
+    const intensity = clamp((tile?.value || 0) + jitter, 0, 1);
     points.push([lat, lng, intensity]);
   }
 
@@ -671,7 +633,7 @@ function generateRegionDay(region, dayIndex) {
       wind: 0,
       human: 0,
     },
-    mlSource: "fallback",
+    mlSource: "unavailable",
     mlError: null,
     gridMeta: {
       minLat,
@@ -924,6 +886,7 @@ function emitRiskDataUpdate() {
 }
 
 function heatColor(value) {
+  if (value == null || !Number.isFinite(Number(value))) return "#7a8190";
   const normalized = clamp(Number(value) || 0, 0, 1);
   if (normalized <= 0.25) return "#3ddc84";
   if (normalized <= 0.45) return "#9be45b";
@@ -942,12 +905,13 @@ function updateZoneLayer() {
   const day = regionData[activeRegion.id].days[activeDay];
 
   day.tiles.forEach((tile) => {
-    const color = heatColor(tile.value);
+    const hasModelColor = day.mlSource === "ml" && Number.isFinite(Number(tile.value));
+    const color = hasModelColor ? heatColor(tile.value) : "#7a8190";
     L.rectangle(tile.bounds, {
       color,
       weight: 1,
       fillColor: color,
-      fillOpacity: 0.28,
+      fillOpacity: hasModelColor ? 0.28 : 0.2,
       opacity: 0.4,
     }).addTo(zoneLayer);
   });
