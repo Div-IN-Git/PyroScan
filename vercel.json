@@ -1,21 +1,15 @@
 {
-  "cleanUrls": true,
-  "trailingSlash": false,
-  "rewrites": [
+  "version": 2,
+  "builds": [
     {
-      "source": "/((?!api/).*)",
-      "destination": "/index.html"
+      "src": "api/process.py",
+      "use": "@vercel/python"
     }
   ],
-  "headers": [
+  "routes": [
     {
-      "source": "/assets/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
-        }
-      ]
+      "src": "/api/predict_batch.py",
+      "dest": "/api/predict_batch.py"
     }
   ]
 }
