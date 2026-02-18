@@ -49,22 +49,15 @@ _MODELS = None
 
 def _get_models():
     global _MODELS
-    if _MODELS is None:
-        _MODELS = load_models("models")
+    _MODELS = load_models("models")
     return _MODELS
 
 def _resolve_model(requested):
     models = _get_models()
     name = str(requested or "").strip() or DEFAULT_MODEL_NAME
-    model = models.get(name)
-    if model is None:
-        fallback = models.get(DEFAULT_MODEL_NAME)
-        if fallback is not None:
-            return DEFAULT_MODEL_NAME, fallback
-        if models:
-            first = sorted(models)[0]
-            return first, models[first]
-    return name, model
+    if name.endswith(".pkl"):
+        name = name[:-4]
+    return name, models.get(name)
 
 def _normalize_tile(tile, index):
     tile_id = tile.get("id") or tile.get("tile")
@@ -115,30 +108,38 @@ class handler(BaseHTTPRequestHandler):
 
             # Load model
             model_name, model = _resolve_model(payload.get("model"))
-            if model is None:
-                raise ValueError("no models available. Add .pkl files to models/")
 
-            # Run prediction
-            if hasattr(model, "predict_tile_records"):
-                confidences = model.predict_tile_records(tiles, day)
-            elif hasattr(model, "predict_proba"):
-                confidences = model.predict_proba([tile["id"] for tile in tiles], day)
-            else:
-                raise ValueError("model is not inference-capable")
-
-            # Format results
+            # Run prediction (or return grey-state placeholders when no model exists)
             results = []
-            for tile, confidence in zip(tiles, confidences):
-                score = max(0.0, min(1.0, float(confidence)))
-                results.append({
-                    "tile": tile["id"],
-                    "confidence": round(score, 4),
-                    "category": category_from_confidence(score),
-                })
+            if model is None:
+                results = [
+                    {
+                        "tile": tile["id"],
+                        "confidence": None,
+                        "category": "safe",
+                    }
+                    for tile in tiles
+                ]
+            else:
+                if hasattr(model, "predict_tile_records"):
+                    confidences = model.predict_tile_records(tiles, day)
+                elif hasattr(model, "predict_proba"):
+                    confidences = model.predict_proba([tile["id"] for tile in tiles], day)
+                else:
+                    raise ValueError("model is not inference-capable")
+
+                for tile, confidence in zip(tiles, confidences):
+                    score = max(0.0, min(1.0, float(confidence)))
+                    results.append({
+                        "tile": tile["id"],
+                        "confidence": round(score, 4),
+                        "category": category_from_confidence(score),
+                    })
 
             response_data = {
                 "ok": True,
-                "model": model_name,
+                "model": model_name if model is not None else None,
+                "requested_model": model_name,
                 "day": day,
                 "count": len(results),
                 "results": results,
