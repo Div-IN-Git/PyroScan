@@ -1,23 +1,21 @@
 """Vercel serverless endpoint for batch fire-risk predictions."""
 
-from __future__ import annotations
-
 import json
 import os
 import pickle
-from typing import Any, Dict, List, Tuple
+from http.server import BaseHTTPRequestHandler
 
 # ============================================================================
-# Model Loading & Utilities (inlined from predict_server.py)
+# Model Loading & Utilities
 # ============================================================================
 
 DEFAULT_MODEL_NAME = "fire_risk_model"
 
-def clamp_day(day: int) -> int:
+def clamp_day(day):
     """Clamp day to valid range 0-9."""
     return max(0, min(9, int(day)))
 
-def category_from_confidence(confidence: float) -> str:
+def category_from_confidence(confidence):
     """Convert confidence score to risk category."""
     if confidence < 0.3:
         return "low"
@@ -28,7 +26,7 @@ def category_from_confidence(confidence: float) -> str:
     else:
         return "extreme"
 
-def load_models(models_dir: str = "models") -> Dict[str, Any]:
+def load_models(models_dir="models"):
     """Load all .pkl model files from the models directory."""
     models = {}
     if not os.path.isdir(models_dir):
@@ -36,7 +34,7 @@ def load_models(models_dir: str = "models") -> Dict[str, Any]:
     
     for filename in os.listdir(models_dir):
         if filename.endswith(".pkl"):
-            model_name = filename[:-4]  # Remove .pkl extension
+            model_name = filename[:-4]
             filepath = os.path.join(models_dir, filename)
             try:
                 with open(filepath, "rb") as f:
@@ -55,7 +53,7 @@ def _get_models():
         _MODELS = load_models("models")
     return _MODELS
 
-def _resolve_model(requested: str | None) -> Tuple[str, Any]:
+def _resolve_model(requested):
     models = _get_models()
     name = str(requested or "").strip() or DEFAULT_MODEL_NAME
     model = models.get(name)
@@ -68,7 +66,7 @@ def _resolve_model(requested: str | None) -> Tuple[str, Any]:
             return first, models[first]
     return name, model
 
-def _normalize_tile(tile: Dict[str, Any], index: int) -> Dict[str, Any]:
+def _normalize_tile(tile, index):
     tile_id = tile.get("id") or tile.get("tile")
     if tile_id is None or str(tile_id).strip() == "":
         raise ValueError(f"tiles[{index}].id is required")
@@ -85,91 +83,87 @@ def _normalize_tile(tile: Dict[str, Any], index: int) -> Dict[str, Any]:
     return normalized
 
 # ============================================================================
-# Vercel Handler
+# Vercel Handler Class - Must inherit from BaseHTTPRequestHandler
 # ============================================================================
 
-def handler(request):
+class handler(BaseHTTPRequestHandler):
     """Vercel serverless function handler."""
     
-    # Handle CORS preflight
-    if request.method == "OPTIONS":
-        return {
-            "statusCode": 204,
-            "headers": {
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type",
-            },
-            "body": "",
-        }
+    def do_OPTIONS(self):
+        """Handle CORS preflight requests."""
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+    
+    def do_POST(self):
+        """Handle POST requests for fire risk prediction."""
+        try:
+            # Read and parse request body
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            payload = json.loads(body.decode("utf-8")) if body else {}
+            
+            day = clamp_day(int(payload.get("day", 0)))
 
-    # Only allow POST
-    if request.method != "POST":
-        return {
-            "statusCode": 405,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.dumps({"error": "method not allowed"}),
-        }
+            # Validate tiles
+            raw_tiles = payload.get("tiles")
+            if not isinstance(raw_tiles, list) or not raw_tiles:
+                raise ValueError("tiles must be a non-empty array")
+            tiles = [_normalize_tile(tile, idx) for idx, tile in enumerate(raw_tiles)]
 
-    try:
-        # Parse request body
-        payload = request.get_json(silent=True) or {}
-        day = clamp_day(int(payload.get("day", 0)))
+            # Load model
+            model_name, model = _resolve_model(payload.get("model"))
+            if model is None:
+                raise ValueError("no models available. Add .pkl files to models/")
 
-        # Validate tiles
-        raw_tiles = payload.get("tiles")
-        if not isinstance(raw_tiles, list) or not raw_tiles:
-            raise ValueError("tiles must be a non-empty array")
-        tiles = [_normalize_tile(tile, idx) for idx, tile in enumerate(raw_tiles)]
+            # Run prediction
+            if hasattr(model, "predict_tile_records"):
+                confidences = model.predict_tile_records(tiles, day)
+            elif hasattr(model, "predict_proba"):
+                confidences = model.predict_proba([tile["id"] for tile in tiles], day)
+            else:
+                raise ValueError("model is not inference-capable")
 
-        # Load model
-        model_name, model = _resolve_model(payload.get("model"))
-        if model is None:
-            raise ValueError("no models available. Add .pkl files to models/")
-
-        # Run prediction
-        if hasattr(model, "predict_tile_records"):
-            confidences = model.predict_tile_records(tiles, day)
-        elif hasattr(model, "predict_proba"):
-            confidences = model.predict_proba([tile["id"] for tile in tiles], day)
-        else:
-            raise ValueError("model is not inference-capable")
-
-        # Format results
-        results = []
-        for tile, confidence in zip(tiles, confidences):
-            score = max(0.0, min(1.0, float(confidence)))
-            results.append(
-                {
+            # Format results
+            results = []
+            for tile, confidence in zip(tiles, confidences):
+                score = max(0.0, min(1.0, float(confidence)))
+                results.append({
                     "tile": tile["id"],
                     "confidence": round(score, 4),
                     "category": category_from_confidence(score),
-                }
-            )
+                })
 
-        return {
-            "statusCode": 200,
-            "headers": {
-                "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*",
-            },
-            "body": json.dumps(
-                {
-                    "ok": True,
-                    "model": model_name,
-                    "day": day,
-                    "count": len(results),
-                    "results": results,
-                }
-            ),
-        }
+            response_data = {
+                "ok": True,
+                "model": model_name,
+                "day": day,
+                "count": len(results),
+                "results": results,
+            }
+            
+            # Send successful response
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(response_data).encode("utf-8"))
 
-    except Exception as exc:
-        return {
-            "statusCode": 400,
-            "headers": {
-                "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*",
-            },
-            "body": json.dumps({"ok": False, "error": str(exc)}),
-        }
+        except Exception as exc:
+            # Send error response
+            error_data = {"ok": False, "error": str(exc)}
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(error_data).encode("utf-8"))
+    
+    def do_GET(self):
+        """Handle GET requests (not supported, return 405)."""
+        self.send_response(405)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps({"error": "method not allowed"}).encode("utf-8"))
