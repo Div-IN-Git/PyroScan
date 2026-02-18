@@ -326,13 +326,13 @@ def generate_fake_models(models_dir: Path | str = "models") -> Dict[str, Path]:
     return paths
 
 
-def load_models(models_dir: Path | str = "models") -> Dict[str, ModelWrapper]:
+def load_models(models_dir: Path | str = "models") -> Dict[str, Any]:
     """Load all .pkl models from disk."""
     directory = Path(models_dir)
     if not directory.exists() or not directory.is_dir():
         return {}
 
-    loaded: Dict[str, ModelWrapper] = {}
+    loaded: Dict[str, Any] = {}
     for path in sorted(directory.glob("*.pkl")):
         try:
             with warnings.catch_warnings():
@@ -366,7 +366,10 @@ def create_app(models_dir: Path | str = "models"):
         "models": load_models(models_dir),
     }
 
-    def resolve_model(requested: Optional[str]) -> Tuple[str, Optional[ModelWrapper]]:
+    def refresh_models() -> None:
+        state["models"] = load_models(state["models_dir"])
+
+    def resolve_model(requested: Optional[str]) -> Tuple[str, Optional[Any]]:
         raw = (requested or DEFAULT_MODEL_NAME).strip()
         name = raw[:-4] if raw.endswith(".pkl") else raw
         return name, state["models"].get(name)
@@ -403,6 +406,7 @@ def create_app(models_dir: Path | str = "models"):
 
     @app.route("/health", methods=["GET"])
     def health():
+        refresh_models()
         return jsonify(
             {
                 "status": "ok",
@@ -414,12 +418,15 @@ def create_app(models_dir: Path | str = "models"):
 
     @app.route("/models", methods=["GET"])
     def list_models():
+        refresh_models()
         return jsonify({"models": sorted(state["models"].keys())})
 
     @app.route("/predict", methods=["GET", "OPTIONS"])
     def predict():
         if request.method == "OPTIONS":
             return "", 204
+        
+        refresh_models()
 
         tile_id = request.args.get("tile", type=str)
         if not tile_id:
@@ -441,7 +448,9 @@ def create_app(models_dir: Path | str = "models"):
     def predict_batch():
         if request.method == "OPTIONS":
             return "", 204
-
+        
+        refresh_models()
+        
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
             return _error_response("JSON body is required")
