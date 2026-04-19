@@ -1,0 +1,1787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PyroScan — AI Wildfire Risk Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
+
+<style>
+:root {
+  --navy:      #080c18;
+  --navy-mid:  #0d1626;
+  --navy-soft: #121e35;
+  --glass-bg:  rgba(255,255,255,0.045);
+  --glass-bdr: rgba(255,255,255,0.10);
+  --glass-blur: blur(18px);
+  --fire:      #ff4500;
+  --fire-glow: rgba(255,69,0,0.35);
+  --amber:     #ffb347;
+  --ice:       #a8d8ff;
+  --text:      #e8edf5;
+  --text-dim:  rgba(232,237,245,0.55);
+  --green:     #22c55e;
+  --yellow:    #eab308;
+  --orange:    #f97316;
+  --red:       #ef4444;
+  --r-low:     #22c55e;
+  --r-mod:     #eab308;
+  --r-high:    #f97316;
+  --r-ext:     #ef4444;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+  font-family: 'Syne', sans-serif;
+  background: radial-gradient(ellipse at bottom, #111a30 0%, #04070d 100%);
+  color: var(--text);
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  cursor: default;
+}
+
+#globe-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-bdr);
+  border-radius: 16px;
+}
+
+body::after {
+  content:'';
+  position:fixed;
+  inset:0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  pointer-events:none;
+  z-index:1;
+  opacity:0.6;
+}
+
+#topbar {
+  position:fixed;
+  top:20px;
+  left:20px;
+  right:20px;
+  z-index:100;
+  display:flex;
+  align-items:center;
+  gap:12px;
+}
+
+#logo {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:10px 18px;
+  flex-shrink:0;
+}
+
+#logo .flame {
+  font-size:22px;
+  animation: flamePulse 2.5s ease-in-out infinite;
+}
+
+@keyframes flamePulse {
+  0%,100% { filter: drop-shadow(0 0 6px #ff6600); transform:scaleY(1); }
+  50%      { filter: drop-shadow(0 0 14px #ff2200); transform:scaleY(1.08); }
+}
+
+#logo-text {
+  font-size:20px;
+  font-weight:800;
+  letter-spacing:0.08em;
+  background: linear-gradient(135deg, #ff6a00, #ffb347);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+#logo-sub {
+  font-family:'DM Mono',monospace;
+  font-size:9px;
+  color: var(--text-dim);
+  letter-spacing:0.15em;
+  text-transform:uppercase;
+  display:block;
+  margin-top:1px;
+}
+
+#search-bar {
+  flex:1;
+  max-width:360px;
+  position:relative;
+}
+
+#search-input {
+  width:100%;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-bdr);
+  border-radius:12px;
+  padding:10px 14px 10px 38px;
+  color: var(--text);
+  font-family:'Syne',sans-serif;
+  font-size:13px;
+  outline:none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+#search-input:focus {
+  border-color: rgba(255,100,0,0.5);
+  box-shadow: 0 0 0 3px rgba(255,69,0,0.12);
+}
+#search-input::placeholder { color: var(--text-dim); }
+.search-icon {
+  position:absolute;
+  left:12px;
+  top:50%;
+  transform:translateY(-50%);
+  color:var(--text-dim);
+  font-size:14px;
+  pointer-events:none;
+}
+
+#search-results {
+  position:absolute;
+  top:calc(100% + 6px);
+  left:0;
+  right:0;
+  background: #0e1929;
+  border: 1px solid var(--glass-bdr);
+  border-radius:12px;
+  overflow:hidden;
+  display:none;
+  z-index:200;
+}
+#search-results.show { display:block; }
+.search-result-item {
+  padding:10px 14px;
+  font-size:12px;
+  color:var(--text-dim);
+  cursor:pointer;
+  border-bottom:1px solid rgba(255,255,255,0.05);
+  transition:background 0.15s;
+}
+.search-result-item:last-child { border:none; }
+.search-result-item:hover { background:rgba(255,69,0,0.1); color:var(--text); }
+.search-result-name { font-weight:600; font-size:13px; color:var(--text); }
+
+#model-badge {
+  margin-left:auto;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:8px 14px;
+  font-family:'DM Mono',monospace;
+  font-size:11px;
+  letter-spacing:0.05em;
+}
+.badge-dot {
+  width:7px; height:7px;
+  border-radius:50%;
+  animation: badgePulse 2s ease-in-out infinite;
+}
+@keyframes badgePulse {
+  0%,100% { opacity:1; }
+  50%      { opacity:0.4; }
+}
+.badge-dot.active   { background:#22c55e; box-shadow:0 0 6px #22c55e; }
+.badge-dot.pending  { background:#eab308; box-shadow:0 0 6px #eab308; }
+.badge-dot.error    { background:#ef4444; box-shadow:0 0 6px #ef4444; }
+
+#env-panel {
+  position:fixed;
+  left:20px;
+  top:50%;
+  transform:translateY(-50%);
+  z-index:100;
+  width:200px;
+  padding:18px;
+}
+
+#env-panel h3 {
+  font-size:10px;
+  letter-spacing:0.18em;
+  text-transform:uppercase;
+  color:var(--text-dim);
+  margin-bottom:14px;
+  font-family:'DM Mono',monospace;
+}
+
+.layer-toggle {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:8px 10px;
+  border-radius:10px;
+  cursor:pointer;
+  margin-bottom:4px;
+  transition: background 0.15s;
+  user-select:none;
+}
+.layer-toggle:hover { background:rgba(255,255,255,0.06); }
+.layer-toggle.active { background:rgba(255,100,0,0.12); }
+
+.layer-icon { font-size:16px; width:22px; text-align:center; }
+.layer-label { font-size:12px; font-weight:600; flex:1; }
+.layer-check {
+  width:16px; height:16px;
+  border-radius:4px;
+  border:1.5px solid var(--glass-bdr);
+  display:flex; align-items:center; justify-content:center;
+  font-size:10px;
+  transition: background 0.2s, border-color 0.2s;
+}
+.layer-toggle.active .layer-check {
+  background: var(--fire);
+  border-color: var(--fire);
+}
+
+.layer-value {
+  font-family:'DM Mono',monospace;
+  font-size:10px;
+  color:var(--text-dim);
+  margin-top:3px;
+  padding-left:32px;
+  display:none;
+}
+.layer-toggle.active + .layer-value { display:block; }
+
+#legend-panel {
+  position:fixed;
+  right:20px;
+  top:50%;
+  transform:translateY(-50%);
+  z-index:100;
+  width:180px;
+  padding:18px;
+}
+
+#legend-panel h3 {
+  font-size:10px;
+  letter-spacing:0.18em;
+  text-transform:uppercase;
+  color:var(--text-dim);
+  margin-bottom:14px;
+  font-family:'DM Mono',monospace;
+}
+
+.legend-item {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-bottom:10px;
+}
+.legend-swatch {
+  width:28px; height:14px;
+  border-radius:4px;
+  flex-shrink:0;
+}
+.legend-label { font-size:12px; font-weight:600; }
+.legend-range {
+  font-family:'DM Mono',monospace;
+  font-size:10px;
+  color:var(--text-dim);
+  display:block;
+}
+
+#stats-block {
+  margin-top:16px;
+  padding-top:14px;
+  border-top:1px solid var(--glass-bdr);
+}
+.stat-row {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:8px;
+}
+.stat-label {
+  font-size:10px;
+  color:var(--text-dim);
+  font-family:'DM Mono',monospace;
+}
+.stat-val {
+  font-family:'DM Mono',monospace;
+  font-size:12px;
+  font-weight:500;
+  color:var(--text);
+}
+
+#timeline-panel {
+  position:fixed;
+  bottom:20px;
+  left:50%;
+  transform:translateX(-50%);
+  z-index:100;
+  padding:16px 24px;
+  min-width:520px;
+}
+
+#timeline-panel h3 {
+  font-size:10px;
+  letter-spacing:0.18em;
+  text-transform:uppercase;
+  color:var(--text-dim);
+  font-family:'DM Mono',monospace;
+  margin-bottom:12px;
+  text-align:center;
+}
+
+#day-slider {
+  width:100%;
+  -webkit-appearance:none;
+  height:4px;
+  border-radius:2px;
+  background: linear-gradient(90deg, var(--fire) 0%, rgba(255,69,0,0.2) 100%);
+  outline:none;
+  margin-bottom:10px;
+}
+#day-slider::-webkit-slider-thumb {
+  -webkit-appearance:none;
+  width:18px; height:18px;
+  border-radius:50%;
+  background: var(--fire);
+  cursor:pointer;
+  box-shadow: 0 0 10px var(--fire-glow);
+  border:2px solid rgba(255,255,255,0.3);
+  transition: box-shadow 0.2s;
+}
+#day-slider::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 18px var(--fire-glow);
+}
+
+#day-labels {
+  display:flex;
+  justify-content:space-between;
+}
+.day-label {
+  font-family:'DM Mono',monospace;
+  font-size:9px;
+  color:var(--text-dim);
+  text-align:center;
+  flex:1;
+  cursor:pointer;
+  transition:color 0.15s;
+}
+.day-label.current { color:var(--fire); font-weight:500; }
+.day-label:hover { color:var(--text); }
+
+#zone-drawer {
+  position:fixed;
+  right:20px;
+  top:80px;
+  width:300px;
+  z-index:150;
+  padding:20px;
+  transform:translateX(340px);
+  transition:transform 0.4s cubic-bezier(0.22,1,0.36,1);
+  max-height:calc(100vh - 160px);
+  overflow-y:auto;
+}
+#zone-drawer.open { transform:translateX(0); }
+
+#zone-drawer::-webkit-scrollbar { width:4px; }
+#zone-drawer::-webkit-scrollbar-track { background:transparent; }
+#zone-drawer::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.15); border-radius:2px; }
+
+#drawer-close {
+  position:absolute;
+  top:12px; right:14px;
+  background:none;
+  border:none;
+  color:var(--text-dim);
+  font-size:18px;
+  cursor:pointer;
+  line-height:1;
+  transition:color 0.15s;
+}
+#drawer-close:hover { color:var(--text); }
+
+#drawer-title {
+  font-size:13px;
+  letter-spacing:0.1em;
+  text-transform:uppercase;
+  color:var(--text-dim);
+  font-family:'DM Mono',monospace;
+  margin-bottom:4px;
+}
+
+#drawer-score {
+  font-size:48px;
+  font-weight:800;
+  line-height:1;
+  margin:8px 0 4px;
+}
+
+#drawer-tier {
+  font-size:13px;
+  font-weight:700;
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+  margin-bottom:16px;
+}
+
+#drawer-coords {
+  font-family:'DM Mono',monospace;
+  font-size:10px;
+  color:var(--text-dim);
+  margin-bottom:16px;
+}
+
+#factors-title {
+  font-size:10px;
+  letter-spacing:0.15em;
+  text-transform:uppercase;
+  color:var(--text-dim);
+  font-family:'DM Mono',monospace;
+  margin-bottom:10px;
+}
+
+.factor-bar-wrap { margin-bottom:10px; }
+.factor-label-row {
+  display:flex;
+  justify-content:space-between;
+  font-size:11px;
+  margin-bottom:4px;
+}
+.factor-name { color:var(--text-dim); }
+.factor-pct  { font-family:'DM Mono',monospace; color:var(--text); }
+
+.factor-track {
+  height:5px;
+  background:rgba(255,255,255,0.08);
+  border-radius:3px;
+  overflow:hidden;
+}
+.factor-fill {
+  height:100%;
+  border-radius:3px;
+  background: linear-gradient(90deg, var(--fire), var(--amber));
+  transition: width 0.6s cubic-bezier(0.22,1,0.36,1);
+}
+
+#drawer-forecast {
+  margin-top:16px;
+  padding-top:14px;
+  border-top:1px solid var(--glass-bdr);
+}
+#drawer-forecast h4 {
+  font-size:10px;
+  letter-spacing:0.15em;
+  text-transform:uppercase;
+  color:var(--text-dim);
+  font-family:'DM Mono',monospace;
+  margin-bottom:10px;
+}
+#mini-forecast-chart {
+  display:flex;
+  align-items:flex-end;
+  gap:4px;
+  height:48px;
+}
+.fc-bar-wrap {
+  flex:1;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:3px;
+}
+.fc-bar {
+  width:100%;
+  border-radius:3px 3px 0 0;
+  transition: height 0.5s ease, background 0.3s;
+  min-height:3px;
+}
+.fc-day-lbl {
+  font-family:'DM Mono',monospace;
+  font-size:8px;
+  color:var(--text-dim);
+}
+
+#loading {
+  position:fixed;
+  inset:0;
+  background:var(--navy);
+  z-index:999;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:20px;
+  transition:opacity 0.6s ease;
+}
+#loading.fade { opacity:0; pointer-events:none; }
+
+.loading-flame {
+  font-size:52px;
+  animation:flamePulse 1.5s ease-in-out infinite;
+}
+.loading-title {
+  font-size:28px;
+  font-weight:800;
+  letter-spacing:0.1em;
+  background:linear-gradient(135deg,#ff6a00,#ffb347);
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
+}
+.loading-sub {
+  font-family:'DM Mono',monospace;
+  font-size:11px;
+  color:var(--text-dim);
+  letter-spacing:0.2em;
+  text-transform:uppercase;
+}
+.loading-bar {
+  width:200px;
+  height:2px;
+  background:rgba(255,255,255,0.1);
+  border-radius:1px;
+  overflow:hidden;
+}
+.loading-fill {
+  height:100%;
+  background:linear-gradient(90deg,var(--fire),var(--amber));
+  border-radius:1px;
+  animation:loadFill 2.2s ease-in-out forwards;
+}
+@keyframes loadFill {
+  0%{width:0%} 60%{width:75%} 100%{width:100%}
+}
+
+#toast {
+  position:fixed;
+  bottom:90px;
+  left:50%;
+  transform:translateX(-50%) translateY(20px);
+  background:#131f35;
+  border:1px solid var(--glass-bdr);
+  border-radius:10px;
+  padding:10px 18px;
+  font-size:12px;
+  font-family:'DM Mono',monospace;
+  color:var(--text-dim);
+  opacity:0;
+  pointer-events:none;
+  transition:opacity 0.3s, transform 0.3s;
+  z-index:300;
+  white-space:nowrap;
+}
+#toast.show {
+  opacity:1;
+  transform:translateX(-50%) translateY(0);
+}
+
+#tooltip {
+  position:fixed;
+  background:#0e1929;
+  border:1px solid var(--glass-bdr);
+  border-radius:8px;
+  padding:8px 12px;
+  font-size:11px;
+  pointer-events:none;
+  z-index:200;
+  display:none;
+}
+#tooltip.show { display:block; }
+.tt-score { font-family:'DM Mono',monospace; font-weight:700; font-size:14px; }
+.tt-tier  { font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:var(--text-dim); margin-top:2px; }
+
+#drop-overlay {
+  position:fixed;
+  inset:0;
+  background:rgba(255,69,0,0.08);
+  border:3px dashed rgba(255,69,0,0.5);
+  z-index:500;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  flex-direction:column;
+  gap:12px;
+  pointer-events:none;
+}
+#drop-overlay.active { display:flex; }
+.drop-icon { font-size:48px; }
+.drop-text { font-size:18px; font-weight:700; color:var(--fire); }
+
+@keyframes fadeUp {
+  from { opacity:0; transform:translateY(12px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+.fade-up { animation:fadeUp 0.5s ease forwards; }
+.fade-up-1 { animation-delay:0.1s; opacity:0; }
+.fade-up-2 { animation-delay:0.2s; opacity:0; }
+.fade-up-3 { animation-delay:0.3s; opacity:0; }
+.fade-up-4 { animation-delay:0.4s; opacity:0; }
+
+/* Modal Styles */
+#map-modal-overlay {
+  position:fixed;
+  inset:0;
+  background:rgba(8, 12, 24, 0.85);
+  backdrop-filter:blur(10px);
+  -webkit-backdrop-filter:blur(10px);
+  z-index:1000;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  opacity:0;
+  transition:opacity 0.3s ease;
+}
+#map-modal-overlay.active {
+  display:flex;
+  opacity:1;
+}
+#map-modal {
+  width:90vw;
+  height:85vh;
+  background:var(--navy-mid);
+  border:1px solid var(--glass-bdr);
+  border-radius:16px;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  box-shadow:0 10px 40px rgba(0,0,0,0.5);
+  transform:scale(0.95);
+  transition:transform 0.3s cubic-bezier(0.22,1,0.36,1);
+}
+#map-modal-overlay.active #map-modal {
+  transform:scale(1);
+}
+#map-modal-header {
+  padding:16px 20px;
+  border-bottom:1px solid var(--glass-bdr);
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  background:rgba(255,255,255,0.02);
+}
+#map-modal-title {
+  font-size:16px;
+  font-weight:700;
+  letter-spacing:0.05em;
+  color:var(--text);
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.map-modal-actions {
+  display:flex;
+  gap:10px;
+}
+.btn-action {
+  background:rgba(255,255,255,0.08);
+  border:1px solid var(--glass-bdr);
+  color:var(--text);
+  padding:6px 12px;
+  border-radius:6px;
+  font-family:'DM Mono',monospace;
+  font-size:11px;
+  cursor:pointer;
+  transition:all 0.2s;
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+.btn-action:hover {
+  background:rgba(255,255,255,0.15);
+  border-color:rgba(255,255,255,0.3);
+}
+.btn-close-modal {
+  background:none;
+  border:none;
+  color:var(--text-dim);
+  font-size:20px;
+  cursor:pointer;
+  line-height:1;
+  padding:4px;
+  transition:color 0.2s;
+}
+.btn-close-modal:hover { color:var(--text); }
+#map2d-container {
+  flex:1;
+  position:relative;
+  background:#000;
+}
+#map2d {
+  width:100%;
+  height:100%;
+}
+</style>
+</head>
+
+<body>
+
+<div id="loading">
+  <div class="loading-flame">🔥</div>
+  <div class="loading-title">PYROSCAN</div>
+  <div class="loading-sub">Initializing Wildfire Intelligence</div>
+  <div class="loading-bar"><div class="loading-fill"></div></div>
+</div>
+
+<canvas id="globe-canvas"></canvas>
+
+<div id="drop-overlay">
+  <div class="drop-icon">🗺️</div>
+  <div class="drop-text">Drop GeoJSON to analyse region</div>
+</div>
+
+<div id="toast"></div>
+
+<div id="tooltip">
+  <div class="tt-score" id="tt-score">—</div>
+  <div class="tt-tier"  id="tt-tier">—</div>
+</div>
+
+<div id="topbar">
+  <div class="glass logo" id="logo">
+    <span class="flame">🔥</span>
+    <div>
+      <span id="logo-text">PYROSCAN</span>
+      <span id="logo-sub">Wildfire Risk Intelligence</span>
+    </div>
+  </div>
+
+  <div id="search-bar" class="fade-up fade-up-1">
+    <span class="search-icon">🔍</span>
+    <input id="search-input" type="text" placeholder="Search location…" autocomplete="off">
+    <div id="search-results"></div>
+  </div>
+
+  <div class="glass" id="model-badge" style="margin-left:auto">
+    <div class="badge-dot pending" id="badge-dot"></div>
+    <span id="badge-text">Awaiting Model</span>
+  </div>
+</div>
+
+<div class="glass fade-up fade-up-2" id="env-panel">
+  <h3>Environmental Layers</h3>
+  <div class="layer-toggle" id="layer-veg" onclick="toggleLayer('veg',this)">
+    <span class="layer-icon">🌿</span>
+    <span class="layer-label">Vegetation</span>
+    <div class="layer-check"></div>
+  </div>
+  <div class="layer-value" id="val-veg">NDVI: —</div>
+  <div class="layer-toggle" id="layer-hum" onclick="toggleLayer('hum',this)">
+    <span class="layer-icon">💧</span>
+    <span class="layer-label">Humidity</span>
+    <div class="layer-check"></div>
+  </div>
+  <div class="layer-value" id="val-hum">RH: —%</div>
+  <div class="layer-toggle" id="layer-tmp" onclick="toggleLayer('tmp',this)">
+    <span class="layer-icon">🌡️</span>
+    <span class="layer-label">Temperature</span>
+    <div class="layer-check"></div>
+  </div>
+  <div class="layer-value" id="val-tmp">LST: —°C</div>
+  <div class="layer-toggle" id="layer-wnd" onclick="toggleLayer('wnd',this)">
+    <span class="layer-icon">💨</span>
+    <span class="layer-label">Wind</span>
+    <div class="layer-check"></div>
+  </div>
+  <div class="layer-value" id="val-wnd">— m/s</div>
+</div>
+
+<div class="glass fade-up fade-up-3" id="legend-panel">
+  <h3>Risk Scale</h3>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:var(--r-low)"></div>
+    <div><div class="legend-label">Low</div><span class="legend-range">0 – 25</span></div>
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:var(--r-mod)"></div>
+    <div><div class="legend-label">Moderate</div><span class="legend-range">26 – 50</span></div>
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:var(--r-high)"></div>
+    <div><div class="legend-label">High</div><span class="legend-range">51 – 75</span></div>
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:var(--r-ext)"></div>
+    <div><div class="legend-label">Extreme</div><span class="legend-range">76 – 100</span></div>
+  </div>
+  <div id="stats-block">
+    <div class="stat-row">
+      <span class="stat-label">TILES LOADED</span>
+      <span class="stat-val" id="stat-tiles">—</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">AVG RISK</span>
+      <span class="stat-val" id="stat-avg">—</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">MAX RISK</span>
+      <span class="stat-val" id="stat-max">—</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">FORECAST DAY</span>
+      <span class="stat-val" id="stat-day">D+0</span>
+    </div>
+  </div>
+</div>
+
+<div class="glass" id="zone-drawer">
+  <button id="drawer-close" onclick="closeDrawer()">✕</button>
+  <div id="drawer-title">Zone Risk Report</div>
+  <div id="drawer-score">—</div>
+  <div id="drawer-tier">—</div>
+  <div id="drawer-coords">—</div>
+  <div id="factors-title">Contributing Factors</div>
+  <div id="factor-bars"></div>
+  <div id="drawer-forecast">
+    <h4>10-Day Outlook</h4>
+    <div id="mini-forecast-chart"></div>
+  </div>
+</div>
+
+<div class="glass fade-up fade-up-4" id="timeline-panel">
+  <h3>Forecast Timeline — Drag to Navigate</h3>
+  <input type="range" id="day-slider" min="0" max="9" value="0">
+  <div id="day-labels"></div>
+</div>
+
+<div id="map-modal-overlay">
+  <div id="map-modal">
+    <div id="map-modal-header">
+      <div id="map-modal-title"><span>🗺️</span> <span id="modal-country-name">Region Map</span></div>
+      <div class="map-modal-actions">
+        <button class="btn-action" onclick="downloadModalJSON()"><span>📄</span> JSON</button>
+        <button class="btn-action" onclick="downloadModalSVG()"><span>📐</span> SVG</button>
+        <button class="btn-action" onclick="downloadModalPNG()"><span>🖼️</span> PNG</button>
+        <div style="width:10px;"></div>
+        <button class="btn-close-modal" onclick="closeMapModal()">✕</button>
+      </div>
+    </div>
+    <div id="map2d-container">
+      <div id="map2d"></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+
+const API = window.location.hostname === 'localhost' ||
+            window.location.hostname === '127.0.0.1'
+  ? 'http://127.0.0.1:8000'
+  : '';
+
+const state = {
+  tiles: [],
+  currentDay: 0,
+  activeLayers: new Set(),
+  selectedTile: null,
+  modelActive: false,
+  centre: { lat: 20, lon: 0 },
+  zoom: 1.0,
+  weatherCache: {},
+};
+
+function buildDayLabels() {
+  const wrap = document.getElementById('day-labels');
+  wrap.innerHTML = '';
+  const today = new Date();
+  for (let i = 0; i <= 9; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    const lbl = document.createElement('div');
+    lbl.className = 'day-label' + (i === 0 ? ' current' : '');
+    lbl.textContent = i === 0 ? 'Today' : d.toLocaleDateString('en', {month:'short', day:'numeric'});
+    lbl.dataset.day = i;
+    lbl.onclick = () => {
+      document.getElementById('day-slider').value = i;
+      onDayChange(i);
+    };
+    wrap.appendChild(lbl);
+  }
+}
+
+document.getElementById('day-slider').addEventListener('input', e => {
+  onDayChange(parseInt(e.target.value));
+});
+
+function onDayChange(day) {
+  state.currentDay = day;
+  document.getElementById('stat-day').textContent = `D+${day}`;
+  document.querySelectorAll('.day-label').forEach((el, i) => {
+    el.classList.toggle('current', i === day);
+  });
+  loadTiles();
+}
+
+// ── THREE.JS GLOBE ────────────────────────────────────────────────────────── //
+const canvas = document.getElementById('globe-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x080c18, 1);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(0, 0, 3.2);
+
+// Stars
+const sp3 = new Float32Array(2000 * 3);
+for (let i = 0; i < 2000; i++) {
+  const r = 150 + Math.random() * 200;
+  const theta = Math.random() * Math.PI * 2;
+  const phi = Math.acos(2 * Math.random() - 1);
+  sp3[i*3]   = r * Math.sin(phi) * Math.cos(theta);
+  sp3[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+  sp3[i*3+2] = r * Math.cos(phi);
+}
+const starGeo2 = new THREE.BufferGeometry();
+starGeo2.setAttribute('position', new THREE.BufferAttribute(sp3, 3));
+const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.5, sizeAttenuation: true, transparent: true, opacity: 0.7 });
+scene.add(new THREE.Points(starGeo2, starMat));
+
+// ── GLOBE WITH EARTH TEXTURE ──────────────────────────────────────────────── //
+const textureLoader = new THREE.TextureLoader();
+
+const EARTH_TEXTURE_URL = 'https://unpkg.com/three-globe/example/img/earth-day.jpg';
+const EARTH_BUMP_URL    = 'https://unpkg.com/three-globe/example/img/earth-topology.png';
+
+const globeGeo = new THREE.SphereGeometry(1, 64, 64);
+
+const globeMat = new THREE.MeshPhongMaterial({
+  color: 0x0a1a30,
+  emissive: 0x061020,
+  shininess: 15,
+  transparent: false,
+  opacity: 1.0,
+});
+const globe = new THREE.Mesh(globeGeo, globeMat);
+scene.add(globe);
+
+textureLoader.load(
+  EARTH_TEXTURE_URL,
+  (texture) => {
+    globeMat.map = texture;
+    globeMat.color.set(0xffffff);
+    globeMat.emissive.set(0x000000);
+    globeMat.needsUpdate = true;
+  },
+  undefined,
+  () => {
+    textureLoader.load(
+      'https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-day.jpg',
+      (texture) => {
+        globeMat.map = texture;
+        globeMat.color.set(0xffffff);
+        globeMat.emissive.set(0x000000);
+        globeMat.needsUpdate = true;
+      },
+      undefined,
+      () => {
+        textureLoader.load(
+          'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/planets/earth_atmos_2048.jpg',
+          (texture) => {
+            globeMat.map = texture;
+            globeMat.color.set(0xffffff);
+            globeMat.emissive.set(0x000000);
+            globeMat.needsUpdate = true;
+          },
+          undefined,
+          () => {
+            const earthCanvas = document.createElement('canvas');
+            earthCanvas.width = 2048;
+            earthCanvas.height = 1024;
+            const ctx = earthCanvas.getContext('2d');
+            ctx.fillStyle = '#1a3a6e';
+            ctx.fillRect(0, 0, 2048, 1024);
+            ctx.fillStyle = '#3a6b3a';
+            function drawContinent(points) {
+              ctx.beginPath();
+              points.forEach(([lon, lat], i) => {
+                const x = ((lon + 180) / 360) * 2048;
+                const y = ((90 - lat) / 180) * 1024;
+                i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+              });
+              ctx.closePath();
+              ctx.fill();
+            }
+            drawContinent([[-168,72],[-140,60],[-130,55],[-125,48],[-120,32],[-110,22],[-85,10],[-75,8],[-60,12],[-50,60],[-65,68],[-80,73],[-110,75],[-140,70],[-168,72]]);
+            drawContinent([[-80,12],[-60,12],[-50,-5],[-35,-8],[-35,-25],[-50,-35],[-65,-55],[-70,-50],[-75,-40],[-75,-20],[-80,0],[-80,12]]);
+            drawContinent([[-10,35],[28,35],[35,45],[30,55],[25,65],[15,70],[-5,58],[-10,50],[-10,35]]);
+            drawContinent([[-18,15],[50,15],[50,-5],[40,-20],[30,-35],[20,-35],[10,-25],[5,-5],[0,5],[-18,15]]);
+            drawContinent([[25,40],[45,40],[60,25],[80,10],[100,5],[120,20],[135,35],[145,40],[140,55],[120,65],[90,75],[60,70],[40,60],[25,55],[25,40]]);
+            drawContinent([[115,-22],[130,-15],[140,-18],[150,-22],[150,-38],[130,-38],[115,-32],[115,-22]]);
+            drawContinent([[-50,58],[-25,60],[-15,70],[-18,82],[-45,83],[-60,76],[-50,58]]);
+            const tex = new THREE.CanvasTexture(earthCanvas);
+            globeMat.map = tex;
+            globeMat.color.set(0xffffff);
+            globeMat.emissive.set(0x000000);
+            globeMat.needsUpdate = true;
+          }
+        );
+      }
+    );
+  }
+);
+
+textureLoader.load(EARTH_BUMP_URL, (bumpTex) => {
+  globeMat.bumpMap = bumpTex;
+  globeMat.bumpScale = 0.05;
+  globeMat.needsUpdate = true;
+});
+
+function addGlobeGrid() {
+  const lineMat = new THREE.LineBasicMaterial({ color: 0x1a3a55, transparent: true, opacity: 0.25 });
+  for (let lat = -80; lat <= 80; lat += 20) {
+    const pts = [];
+    for (let lon = 0; lon <= 360; lon += 5) {
+      pts.push(latLonToVec3(lat, lon, 1.002));
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    scene.add(new THREE.Line(geo, lineMat));
+  }
+  for (let lon = 0; lon < 360; lon += 30) {
+    const pts = [];
+    for (let lat = -90; lat <= 90; lat += 5) {
+      pts.push(latLonToVec3(lat, lon, 1.002));
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    scene.add(new THREE.Line(geo, lineMat));
+  }
+}
+addGlobeGrid();
+
+const atmGeo = new THREE.SphereGeometry(1.08, 32, 32);
+const atmMat = new THREE.MeshPhongMaterial({
+  color: 0x1a5aff,
+  transparent: true,
+  opacity: 0.06,
+  side: THREE.BackSide,
+});
+scene.add(new THREE.Mesh(atmGeo, atmMat));
+
+scene.add(new THREE.AmbientLight(0xaabbcc, 0.9));
+const sunLight = new THREE.DirectionalLight(0xffeedd, 0.8);
+sunLight.position.set(5, 3, 5);
+scene.add(sunLight);
+const fillLight = new THREE.DirectionalLight(0x334466, 0.5);
+fillLight.position.set(-5, -2, -3);
+scene.add(fillLight);
+const fireLight = new THREE.PointLight(0xff4400, 0.3, 10);
+fireLight.position.set(-2, 1, 2);
+scene.add(fireLight);
+
+const tilesGroup = new THREE.Group();
+scene.add(tilesGroup);
+
+function latLonToVec3(lat, lon, r = 1) {
+  const phi   = (90 - lat) * (Math.PI / 180);
+  const theta = (lon + 180) * (Math.PI / 180);
+  return new THREE.Vector3(
+    -r * Math.sin(phi) * Math.cos(theta),
+     r * Math.cos(phi),
+     r * Math.sin(phi) * Math.sin(theta),
+  );
+}
+
+function hexToThree(hex) {
+  return new THREE.Color(hex);
+}
+
+function createTileMesh(tile) {
+  const { lat, lon, lat_size = 1, lon_size = 1, color = '#22c55e', risk_score = 0 } = tile;
+  const intensity = risk_score / 100;
+  const r = 1.004 + intensity * 0.006;
+
+  const pts = [];
+  const steps = 6;
+  for (let i = 0; i <= steps; i++) {
+    for (let j = 0; j <= steps; j++) {
+      const la = lat - lat_size/2 + (lat_size/steps)*i;
+      const lo = lon - lon_size/2 + (lon_size/steps)*j;
+      pts.push(latLonToVec3(la, lo, r));
+    }
+  }
+
+  const verts = [];
+  const n = steps + 1;
+  for (let i = 0; i < steps; i++) {
+    for (let j = 0; j < steps; j++) {
+      const a = i*n+j, b = a+1, c = (i+1)*n+j, d = c+1;
+      verts.push(...pts[a].toArray(), ...pts[b].toArray(), ...pts[c].toArray());
+      verts.push(...pts[b].toArray(), ...pts[d].toArray(), ...pts[c].toArray());
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  geo.computeVertexNormals();
+
+  const col = hexToThree(color);
+  const mat = new THREE.MeshPhongMaterial({
+    color: col,
+    emissive: col,
+    emissiveIntensity: 0.3 + intensity * 0.4,
+    transparent: true,
+    opacity: 0.45 + intensity * 0.35,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.userData = tile;
+  return mesh;
+}
+
+function renderTiles(tiles) {
+  while (tilesGroup.children.length) tilesGroup.remove(tilesGroup.children[0]);
+  tiles.forEach(tile => {
+    const mesh = createTileMesh(tile);
+    tilesGroup.add(mesh);
+  });
+}
+
+// ── ORBIT CONTROLS ────────────────────────────────────────────────────────── //
+let isDragging = false, prevMouse = { x: 0, y: 0 };
+
+// Three.js SphereGeometry UV mapping analysis:
+// The texture u=0 (left edge, lon=-180) maps to phi=0 on the sphere.
+// At phi=0: x=-cos(0)=-1, z=sin(0)=0 — this points to -X, not the camera.
+// At phi=PI/2 (u=0.25, lon=-90): z=+1 — this faces the camera (+Z) by default.
+// At phi=PI   (u=0.5,  lon=0):   x=+1, z=0 — texture center is at the SIDE.
+//
+// To bring lon=0 to face the camera, we need globe.rotation.y = -PI/2.
+// General formula: rotY = -(lon * PI/180) - PI/2
+//   i.e. LON_OFFSET = -PI/2
+//
+// Derived mathematically: z_world = sin(rotY + phi), where phi = lon*PI/180 + PI
+// Setting z_world=1: rotY = PI/2 - phi = PI/2 - lon*PI/180 - PI = -PI/2 - lon*PI/180  ✓
+const LON_OFFSET = -Math.PI / 2;
+
+let rotX = 0,        rotY = LON_OFFSET;
+let targetRotX = 0,  targetRotY = LON_OFFSET;
+let autoRotate = true;
+let interactionTimeout = null;
+
+function resetInteraction() {
+  clearTimeout(interactionTimeout);
+  interactionTimeout = setTimeout(() => {
+    autoRotate = true;
+  }, 60000);
+}
+
+canvas.addEventListener('mousedown', e => {
+  isDragging = true; autoRotate = false;
+  resetInteraction();
+  prevMouse = { x: e.clientX, y: e.clientY };
+});
+canvas.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  resetInteraction();
+  const dx = e.clientX - prevMouse.x;
+  const dy = e.clientY - prevMouse.y;
+  targetRotY += dx * 0.008;
+  targetRotX += dy * 0.008;
+  targetRotX = Math.max(-1.4, Math.min(1.4, targetRotX));
+  prevMouse = { x: e.clientX, y: e.clientY };
+});
+canvas.addEventListener('mouseup', () => { isDragging = false; });
+canvas.addEventListener('mouseleave', () => { isDragging = false; });
+
+canvas.addEventListener('wheel', e => {
+  autoRotate = false;
+  resetInteraction();
+  camera.position.z += e.deltaY * 0.003;
+  camera.position.z = Math.max(1.5, Math.min(5, camera.position.z));
+}, { passive: true });
+
+const raycaster = new THREE.Raycaster();
+const mouse2d = new THREE.Vector2();
+let mouseDownPos = null;
+
+canvas.addEventListener('mousedown', e => { mouseDownPos = {x:e.clientX,y:e.clientY}; });
+canvas.addEventListener('click', e => {
+  if (!mouseDownPos) return;
+  const dx = e.clientX-mouseDownPos.x, dy = e.clientY-mouseDownPos.y;
+  if (Math.sqrt(dx*dx+dy*dy) > 5) return;
+  mouse2d.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse2d.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse2d, camera);
+  const hits = raycaster.intersectObjects(tilesGroup.children);
+  if (hits.length) {
+    openDrawer(hits[0].object.userData);
+  }
+});
+
+canvas.addEventListener('dblclick', e => {
+  mouse2d.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse2d.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse2d, camera);
+  const hits = raycaster.intersectObject(globe);
+  if (hits.length) {
+    const pt = globe.worldToLocal(hits[0].point.clone());
+    pt.normalize();
+    const phi = Math.acos(pt.y);
+    const theta = Math.atan2(pt.z, -pt.x);
+    const lat = 90 - (phi * 180 / Math.PI);
+    let lon = (theta * 180 / Math.PI) - 180;
+    while(lon <= -180) lon += 360;
+    while(lon > 180) lon -= 360;
+    handleGlobeDoubleClick(lat, lon);
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  mouse2d.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse2d.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse2d, camera);
+  const hits = raycaster.intersectObjects(tilesGroup.children);
+  const tt = document.getElementById('tooltip');
+  if (hits.length) {
+    const t = hits[0].object.userData;
+    document.getElementById('tt-score').textContent = t.risk_score?.toFixed(1) ?? '—';
+    document.getElementById('tt-score').style.color = t.color || '#fff';
+    document.getElementById('tt-tier').textContent = t.risk_tier ?? '—';
+    tt.style.left = (e.clientX + 14) + 'px';
+    tt.style.top  = (e.clientY - 10) + 'px';
+    tt.classList.add('show');
+    canvas.style.cursor = 'pointer';
+  } else {
+    tt.classList.remove('show');
+    canvas.style.cursor = isDragging ? 'grabbing' : 'grab';
+  }
+});
+
+// ── RENDER LOOP ───────────────────────────────────────────────────────────── //
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+
+  if (autoRotate) targetRotY += 0.0008;
+
+  rotX += (targetRotX - rotX) * 0.08;
+  rotY += (targetRotY - rotY) * 0.08;
+
+  globe.rotation.x = rotX;
+  globe.rotation.y = rotY;
+  tilesGroup.rotation.x = rotX;
+  tilesGroup.rotation.y = rotY;
+
+  fireLight.intensity = 0.25 + Math.sin(t * 2.3) * 0.1;
+
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ── API CALLS ─────────────────────────────────────────────────────────────── //
+async function apiFetch(path) {
+  try {
+    const r = await fetch(API + path);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  } catch (e) {
+    console.warn('API fetch failed:', path, e);
+    return null;
+  }
+}
+
+async function checkHealth() {
+  const data = await apiFetch('/api/health');
+  if (!data) return;
+  const dot = document.getElementById('badge-dot');
+  const txt = document.getElementById('badge-text');
+  state.modelActive = data.model_loaded;
+  if (data.model_loaded) {
+    dot.className = 'badge-dot active';
+    txt.textContent = '🟢 Model Active';
+  } else if (data.model_state === 'MODEL_ERROR') {
+    dot.className = 'badge-dot error';
+    txt.textContent = '🔴 Model Error';
+  } else {
+    dot.className = 'badge-dot pending';
+    txt.textContent = '🟡 Awaiting Model';
+  }
+}
+
+async function loadTiles() {
+  showToast('Loading risk tiles…');
+  const day = state.currentDay;
+  const url = `/api/risk/tiles?min_lat=-60&max_lat=75&min_lon=-180&max_lon=180&tile_deg=5&day_offset=${day}&stream=1`;
+  console.log('[PyroScan] Fetching tiles (streaming):', API + url);
+  
+  while (tilesGroup.children.length) tilesGroup.remove(tilesGroup.children[0]);
+  state.tiles = [];
+  updateStats(state.tiles);
+
+  try {
+    const response = await fetch(API + url, {
+      headers: { 'Accept': 'application/x-ndjson' },
+      cache: 'no-store'
+    });
+    if (!response.ok) {
+      showToast(`HTTP ${response.status} — API unreachable`);
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // keep the last incomplete line in buffer
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const data = JSON.parse(line);
+        
+        if (data.tiles && data.tiles.length > 0) {
+           state.tiles.push(...data.tiles);
+           data.tiles.forEach(tile => {
+             const mesh = createTileMesh(tile);
+             tilesGroup.add(mesh);
+           });
+           updateStats(state.tiles);
+        }
+      }
+    }
+    
+    if (buffer.trim()) {
+      const data = JSON.parse(buffer);
+      if (data.tiles) {
+         state.tiles.push(...data.tiles);
+         data.tiles.forEach(tile => {
+           const mesh = createTileMesh(tile);
+           tilesGroup.add(mesh);
+         });
+         updateStats(state.tiles);
+      }
+    }
+
+    showToast(`${state.tiles.length} tiles loaded`);
+  } catch (e) {
+    console.error('[PyroScan] Fetch error:', e);
+    showToast('Error loading tiles');
+  }
+}
+
+function updateStats(tiles) {
+  document.getElementById('stat-tiles').textContent = tiles.length;
+  const scores = tiles.map(t => t.risk_score).filter(s => s != null);
+  if (scores.length) {
+    const avg = scores.reduce((a,b)=>a+b,0)/scores.length;
+    const max = Math.max(...scores);
+    document.getElementById('stat-avg').textContent = avg.toFixed(1);
+    document.getElementById('stat-max').textContent = max.toFixed(1);
+  }
+}
+
+// ── DRAWER ────────────────────────────────────────────────────────────────── //
+async function openDrawer(tile) {
+  state.selectedTile = tile;
+  const drawer = document.getElementById('zone-drawer');
+  document.getElementById('drawer-score').textContent = tile.risk_score?.toFixed(1) ?? '—';
+  document.getElementById('drawer-score').style.color = tile.color || '#fff';
+  document.getElementById('drawer-tier').textContent = tile.risk_tier ?? '—';
+  document.getElementById('drawer-tier').style.color = tile.color || '#fff';
+  document.getElementById('drawer-coords').textContent =
+    `${tile.lat.toFixed(2)}°, ${tile.lon.toFixed(2)}°`;
+  renderFactorBars(tile.factor_breakdown || {});
+  fetchZoneDetail(tile);
+  fetchForecastForDrawer(tile);
+  drawer.classList.add('open');
+}
+
+function closeDrawer() {
+  document.getElementById('zone-drawer').classList.remove('open');
+}
+
+function renderFactorBars(breakdown) {
+  const wrap = document.getElementById('factor-bars');
+  wrap.innerHTML = '';
+  const entries = Object.entries(breakdown).sort((a,b)=>b[1]-a[1]);
+  entries.forEach(([name, val]) => {
+    const pct = Math.min(100, (val / 25) * 100);
+    wrap.innerHTML += `
+      <div class="factor-bar-wrap">
+        <div class="factor-label-row">
+          <span class="factor-name">${name}</span>
+          <span class="factor-pct">${val.toFixed(1)}</span>
+        </div>
+        <div class="factor-track">
+          <div class="factor-fill" style="width:${pct}%"></div>
+        </div>
+      </div>`;
+  });
+}
+
+async function fetchZoneDetail(tile) {
+  const data = await apiFetch(
+    `/api/risk/zone/${tile.id}?lat=${tile.lat}&lon=${tile.lon}&day_offset=${state.currentDay}`
+  );
+  if (data && data.factor_breakdown) {
+    renderFactorBars(data.factor_breakdown);
+    document.getElementById('drawer-score').textContent = data.risk_score?.toFixed(1) ?? '—';
+  }
+}
+
+async function fetchForecastForDrawer(tile) {
+  const data = await apiFetch(`/api/forecast?lat=${tile.lat}&lon=${tile.lon}`);
+  if (!data || !data.forecast_days) return;
+  const chart = document.getElementById('mini-forecast-chart');
+  chart.innerHTML = '';
+  data.forecast_days.forEach(day => {
+    const h = Math.max(4, (day.risk_score / 100) * 48);
+    chart.innerHTML += `
+      <div class="fc-bar-wrap">
+        <div class="fc-bar" style="height:${h}px; background:${day.color}; opacity:0.8;"></div>
+        <div class="fc-day-lbl">${day.day===0?'T':day.day}</div>
+      </div>`;
+  });
+}
+
+// ── ENV LAYERS ────────────────────────────────────────────────────────────── //
+function toggleLayer(id, el) {
+  if (state.activeLayers.has(id)) {
+    state.activeLayers.delete(id);
+    el.classList.remove('active');
+  } else {
+    state.activeLayers.add(id);
+    el.classList.add('active');
+    fetchLayerData(id);
+  }
+}
+
+async function fetchLayerData(id) {
+  if (id === 'veg') {
+    document.getElementById('val-veg').innerHTML = `NDVI: 0.32 <span style="color:var(--text-dim);font-size:9px">(Global Avg)</span>`;
+  } else if (id === 'hum') {
+    document.getElementById('val-hum').innerHTML = `RH: 65% <span style="color:var(--text-dim);font-size:9px">(Global Avg)</span>`;
+  } else if (id === 'wnd') {
+    document.getElementById('val-wnd').innerHTML = `5.5 m/s <span style="color:var(--text-dim);font-size:9px">(Global Avg)</span>`;
+  } else if (id === 'tmp') {
+    document.getElementById('val-tmp').innerHTML = `LST: 14.5°C <span style="color:var(--text-dim);font-size:9px">(Global Avg)</span>`;
+  }
+}
+
+// ── SEARCH ────────────────────────────────────────────────────────────────── //
+let searchTimer;
+const searchInput = document.getElementById('search-input');
+const searchResults = document.getElementById('search-results');
+
+searchInput.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  const q = searchInput.value.trim();
+  if (q.length < 2) { searchResults.classList.remove('show'); return; }
+  searchTimer = setTimeout(() => runSearch(q), 400);
+});
+
+searchInput.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { searchResults.classList.remove('show'); searchInput.blur(); }
+});
+
+document.addEventListener('click', e => {
+  if (!searchInput.contains(e.target) && !searchResults.contains(e.target)) {
+    searchResults.classList.remove('show');
+  }
+});
+
+async function runSearch(q) {
+  const data = await apiFetch(`/api/search?q=${encodeURIComponent(q)}`);
+  if (!data || !data.results?.length) {
+    searchResults.innerHTML = '<div class="search-result-item">No results found</div>';
+    searchResults.classList.add('show');
+    return;
+  }
+  searchResults.innerHTML = data.results.slice(0,5).map(r => `
+    <div class="search-result-item" onclick="flyTo(${r.lat},${r.lon},'${r.name.replace(/'/g,"\\'")}')">
+      <div class="search-result-name">${r.name.split(',')[0]}</div>
+      <div>${r.lat.toFixed(3)}, ${r.lon.toFixed(3)}</div>
+    </div>`).join('');
+  searchResults.classList.add('show');
+}
+
+// ── FLY TO ────────────────────────────────────────────────────────────────── //
+function flyTo(lat, lon, name) {
+  searchResults.classList.remove('show');
+  searchInput.value = name.split(',')[0];
+  state.centre = { lat, lon };
+
+  // Bring (lat, lon) to face the camera.
+  // rotY = -(lon * PI/180) + LON_OFFSET   (LON_OFFSET=-PI/2 corrects Three.js UV)
+  // rotX = +atan(sin(lat * PI/180))        (positive = tilt north toward camera)
+  //   derivation: after rotY, target point is at z=1, y=sin(lat_rad)
+  //   we want y_world=0 so it's vertically centered: tan(rotX) = sin(lat_rad)
+  targetRotY = -(lon * Math.PI / 180) + LON_OFFSET;
+  targetRotX = Math.atan(Math.sin(lat * Math.PI / 180));
+  autoRotate = false;
+  resetInteraction();
+  showToast(`Flying to ${name.split(',')[0]}`);
+}
+
+// ── DRAG & DROP ───────────────────────────────────────────────────────────── //
+const dropOverlay = document.getElementById('drop-overlay');
+
+document.addEventListener('dragover', e => {
+  e.preventDefault();
+  dropOverlay.classList.add('active');
+});
+document.addEventListener('dragleave', e => {
+  if (!e.relatedTarget) dropOverlay.classList.remove('active');
+});
+document.addEventListener('drop', async e => {
+  e.preventDefault();
+  dropOverlay.classList.remove('active');
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  showToast(`Processing ${file.name}…`);
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch(API + '/api/maps/upload', { method:'POST', body:fd });
+    const d = await r.json();
+    if (d.status === 'completed') {
+      showToast(`✓ Region loaded — ${file.name}`);
+      if (d.bbox) {
+        const [minLat,minLon,maxLat,maxLon] = d.bbox;
+        flyTo((minLat+maxLat)/2, (minLon+maxLon)/2, file.name.replace('.geojson',''));
+      }
+    } else {
+      showToast(`Error: ${d.error || 'Upload failed'}`);
+    }
+  } catch {
+    showToast('Upload failed — check API connection');
+  }
+});
+
+// ── TOAST ─────────────────────────────────────────────────────────────────── //
+let toastTimer;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+// ── 2D MAP MODAL ──────────────────────────────────────────────────────────── //
+let map2dInstance = null;
+let modalTilesLayer = null;
+
+async function handleGlobeDoubleClick(lat, lon) {
+  showToast('Identifying region...');
+  try {
+    const revUrl = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`;
+    const revRes = await fetch(revUrl, { headers: { 'User-Agent': 'PyroScan/1.0' }});
+    const revData = await revRes.json();
+    
+    if (!revData || !revData.address || !revData.address.country) {
+      showToast('Could not identify country at this location.');
+      return;
+    }
+    
+    const country = revData.address.country;
+    showToast(`Loading data for ${country}...`);
+    
+    const searchUrl = `https://nominatim.openstreetmap.org/search?country=${encodeURIComponent(country)}&format=json&polygon_geojson=1`;
+    const searchRes = await fetch(searchUrl, { headers: { 'User-Agent': 'PyroScan/1.0' }});
+    const searchData = await searchRes.json();
+    
+    if (!searchData || searchData.length === 0) {
+      showToast('Could not find bounding box for ' + country);
+      return;
+    }
+    
+    const bb = searchData[0].boundingbox; // [minLat, maxLat, minLon, maxLon]
+    const bbox = { minLat: parseFloat(bb[0]), maxLat: parseFloat(bb[1]), minLon: parseFloat(bb[2]), maxLon: parseFloat(bb[3]) };
+    const geojson = searchData[0].geojson;
+    
+    openMapModal(country, bbox, geojson);
+  } catch(e) {
+    console.error('Geocoding error:', e);
+    showToast('Error looking up region data.');
+  }
+}
+
+async function openMapModal(countryName, bbox, geojson) {
+  document.getElementById('modal-country-name').textContent = countryName;
+  document.getElementById('map-modal-overlay').classList.add('active');
+  
+  if (!map2dInstance) {
+    map2dInstance = L.map('map2d', { zoomControl: false });
+    L.control.zoom({ position: 'bottomright' }).addTo(map2dInstance);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
+      subdomains: 'abcd',
+      maxZoom: 20
+    }).addTo(map2dInstance);
+  }
+  
+  map2dInstance.fitBounds([
+    [bbox.minLat, bbox.minLon],
+    [bbox.maxLat, bbox.maxLon]
+  ]);
+  
+  setTimeout(() => map2dInstance.invalidateSize(), 300);
+  
+  if (modalTilesLayer) {
+    map2dInstance.removeLayer(modalTilesLayer);
+  }
+  modalTilesLayer = L.layerGroup().addTo(map2dInstance);
+  
+  if (geojson) {
+    L.geoJSON(geojson, {
+      style: { color: '#ffffff', weight: 1.5, fill: false, opacity: 0.3 }
+    }).addTo(modalTilesLayer);
+  }
+  
+  state.modalData = { countryName, bbox, tiles: [] };
+  
+  const clat = (bbox.minLat + bbox.maxLat) / 2;
+  const clon = (bbox.minLon + bbox.maxLon) / 2;
+  
+  let latSpan = bbox.maxLat - bbox.minLat;
+  let lonSpan = bbox.maxLon - bbox.minLon;
+  
+  // Handle bounding boxes crossing the antimeridian
+  if (lonSpan < 0) {
+    bbox.minLon = -180;
+    bbox.maxLon = 180;
+    lonSpan = 360;
+  }
+  
+  // Dynamically calculate tile_deg to prevent exceeding the backend 2048 tile limit
+  let tile_deg = 1;
+  const maxTilesAllowed = 2000;
+  const expectedTiles = latSpan * lonSpan; // Assuming tile_deg = 1
+  if (expectedTiles > maxTilesAllowed) {
+    tile_deg = Math.ceil(Math.sqrt((latSpan * lonSpan) / maxTilesAllowed));
+  }
+  
+  // Fetch detailed tiles
+  const url = `/api/risk/tiles?min_lat=${bbox.minLat}&max_lat=${bbox.maxLat}&min_lon=${bbox.minLon}&max_lon=${bbox.maxLon}&tile_deg=${tile_deg}&day_offset=${state.currentDay}`;
+  try {
+    const res = await fetch(API + url, { headers: { 'Accept': 'application/json' }});
+    // In stream mode, it might be NDJSON. Let's just use the regular API without stream if possible.
+    // The Python API defaults to JSON if stream=1 is not provided and Accept header is not ndjson.
+    // Actually, our API does: wants_stream = "application/x-ndjson" in accept.
+    const data = await res.json();
+    if (data.tiles) {
+      data.tiles.forEach(t => {
+        if (geojson) {
+          const pt = turf.point([t.lon, t.lat]);
+          // Nominatim geojson can be GeometryCollection sometimes, turf supports it mostly,
+          // but booleanPointInPolygon needs a Polygon or MultiPolygon.
+          try {
+            if (!turf.booleanPointInPolygon(pt, geojson)) return;
+          } catch(err) {
+            // If turf fails (e.g. geometry type unsupported), we skip filtering
+          }
+        }
+        state.modalData.tiles.push(t);
+        const bounds = [
+          [t.lat - (t.lat_size||1)/2, t.lon - (t.lon_size||1)/2],
+          [t.lat + (t.lat_size||1)/2, t.lon + (t.lon_size||1)/2]
+        ];
+        L.rectangle(bounds, {
+          color: t.color || '#22c55e',
+          weight: 1,
+          fillColor: t.color || '#22c55e',
+          fillOpacity: 0.4 + (t.risk_score/100)*0.4
+        }).addTo(modalTilesLayer);
+      });
+    }
+  } catch(e) {
+    console.error('Error fetching modal tiles:', e);
+  }
+  
+  // Fetch weather/veg for the JSON export
+  try {
+    const [wRes, vRes, tRes] = await Promise.all([
+      apiFetch(`/api/weather/current?lat=${clat}&lon=${clon}`),
+      apiFetch(`/api/layers/vegetation?lat=${clat}&lon=${clon}`),
+      apiFetch(`/api/layers/temperature?lat=${clat}&lon=${clon}`)
+    ]);
+    state.modalData.weather = wRes;
+    state.modalData.vegetation = vRes;
+    state.modalData.temperature = tRes;
+  } catch(e) {}
+}
+
+function closeMapModal() {
+  document.getElementById('map-modal-overlay').classList.remove('active');
+}
+
+async function downloadModalPNG() {
+  const node = document.getElementById('map2d-container');
+  try {
+    const dataUrl = await htmlToImage.toPng(node);
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `pyroscan_${state.modalData.countryName}_map.png`;
+    a.click();
+  } catch (e) {
+    showToast('Failed to generate PNG.');
+    console.error(e);
+  }
+}
+
+async function downloadModalSVG() {
+  const node = document.getElementById('map2d-container');
+  try {
+    const dataUrl = await htmlToImage.toSvg(node);
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `pyroscan_${state.modalData.countryName}_map.svg`;
+    a.click();
+  } catch (e) {
+    showToast('Failed to generate SVG.');
+    console.error(e);
+  }
+}
+
+function downloadModalJSON() {
+  if (!state.modalData) return;
+  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(state.modalData, null, 2));
+  const a = document.createElement('a');
+  a.href = dataStr;
+  a.download = `pyroscan_${state.modalData.countryName}_data.json`;
+  a.click();
+}
+
+// ── INIT ──────────────────────────────────────────────────────────────────── //
+async function init() {
+  buildDayLabels();
+  setTimeout(() => {
+    document.getElementById('loading').classList.add('fade');
+    setTimeout(() => document.getElementById('loading').remove(), 700);
+  }, 2300);
+  await checkHealth();
+  await loadTiles();
+  setInterval(checkHealth, 30000);
+}
+
+init();
+</script>
+</body>
+</html>
