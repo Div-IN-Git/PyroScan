@@ -2,16 +2,17 @@
 PyroScan API Test Suite
 =======================
 Tests all core API endpoints and internal services.
-Run with: pytest tests/test_api.py -v
+Run with: pytest test/test_api.py -v
 """
 
 import sys
 import os
+import io
 import numpy as np
 import pytest
 
-# Ensure api/ is on the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "api"))
+# Ensure the project root is on the path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 # ─────────────────────────────────────────────────────────────────────────── #
@@ -21,7 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "api"))
 
 class TestTileProcessor:
     def setup_method(self):
-        from services.tile_processor import TileProcessor
+        from api.services.tile_processor import TileProcessor
         self.processor = TileProcessor()
 
     def test_generate_grid_returns_tiles(self):
@@ -107,23 +108,24 @@ class TestTileProcessor:
 class TestModelLoader:
     def test_state_is_pending_when_no_model(self):
         """ModelLoader should be in PENDING state when no model files exist."""
-        from services.model_loader import model_loader, ModelState
+        from api.services.model_loader import model_loader, ModelState
         # In CI there are no model files, so state is PENDING or ERROR
         assert model_loader.state in (ModelState.PENDING, ModelState.ACTIVE, ModelState.ERROR)
 
     def test_is_loaded_returns_bool(self):
-        from services.model_loader import model_loader
+        from api.services.model_loader import model_loader
         assert isinstance(model_loader.is_loaded(), bool)
 
     def test_predict_raises_when_no_model(self, tmp_path, monkeypatch):
         """predict() must raise ModelNotAvailableError when no model is loaded."""
-        from services.model_loader import ModelLoader, ModelState, ModelNotAvailableError
+        from api.services.model_loader import ModelLoader, ModelState, ModelNotAvailableError
         monkeypatch.setattr(
-            "services.model_loader.MODELS_DIR", tmp_path
+            "api.services.model_loader.MODELS_DIR", tmp_path
         )
         loader = ModelLoader.__new__(ModelLoader)
         import threading
-        loader._model = None
+        loader._models = []
+        loader._errors = {}
         loader._config = {}
         loader._lock = threading.RLock()
         loader.state = ModelState.PENDING
@@ -148,9 +150,9 @@ class TestModelLoader:
         with open(model_path, "wb") as f:
             pickle.dump(clf, f)
 
-        monkeypatch.setattr("services.model_loader.MODELS_DIR", tmp_path)
+        monkeypatch.setattr("api.services.model_loader.MODELS_DIR", tmp_path)
 
-        from services.model_loader import ModelLoader, ModelState
+        from api.services.model_loader import ModelLoader, ModelState
         loader = ModelLoader()
         assert loader.state == ModelState.ACTIVE
 
@@ -165,61 +167,51 @@ class TestModelLoader:
 
 
 class TestDataFetcher:
-    @pytest.mark.asyncio
-    async def test_fetch_tile_features_shape(self):
-        from services.data_fetcher import data_fetcher
-        features = await data_fetcher.fetch_tile_features(37.5, -122.0, 0)
+    def test_fetch_features_shape(self):
+        from api.services.data_fetcher import data_fetcher
+        features = data_fetcher.fetch_features_sync(37.5, -122.0, 0)
         arr = features.to_numpy()
         assert arr.shape == (14,)
 
-    @pytest.mark.asyncio
-    async def test_fetch_tile_features_ranges(self):
-        from services.data_fetcher import data_fetcher
-        features = await data_fetcher.fetch_tile_features(10.0, 20.0, 0)
+    def test_fetch_features_ranges(self):
+        from api.services.data_fetcher import data_fetcher
+        features = data_fetcher.fetch_features_sync(10.0, 20.0, 0)
         assert -1.0 <= features.ndvi <= 1.0
         assert -1.0 <= features.evi <= 1.0
         assert 0 <= features.relative_humidity <= 100
         assert 0 <= features.wind_speed
         assert 0 <= features.human_density_index <= 1.0
 
-    @pytest.mark.asyncio
-    async def test_weather_fallback(self):
-        from services.data_fetcher import DataFetcher
+    def test_weather_fallback(self):
+        from api.services.data_fetcher import DataFetcher
         f = DataFetcher()
-        w = await f.fetch_weather_current(45.0, 10.0)
+        w = f.fetch_weather_sync(45.0, 10.0)
         assert "temp" in w
         assert "humidity" in w
 
     def test_fuel_moisture_code_bounds(self):
-        from services.data_fetcher import DataFetcher
+        from api.services.data_fetcher import DataFetcher
         f = DataFetcher()
-        fmc = f._calc_fuel_moisture_code(40, 10, 20, 0)
+        fmc = f._calc_fmc(40, 10, 20, 0)
         assert 0 <= fmc <= 100
 
     def test_synthetic_weather_deterministic(self):
-        from services.data_fetcher import DataFetcher
+        from api.services.data_fetcher import DataFetcher
         f = DataFetcher()
-        w1 = f._synthetic_weather(37.0, -122.0)
-        w2 = f._synthetic_weather(37.0, -122.0)
+        w1 = f._synth_weather(37.0, -122.0)
+        w2 = f._synth_weather(37.0, -122.0)
         assert w1["temp"] == w2["temp"]
 
 
 # ─────────────────────────────────────────────────────────────────────────── #
-#  Integration tests — FastAPI endpoints                                       #
+#  Integration tests — Flask endpoints                                         #
 # ─────────────────────────────────────────────────────────────────────────── #
 
 
 @pytest.fixture(scope="module")
 def client():
-    from fastapi.testclient import TestClient
-    import importlib, sys
-
-    # Ensure api/ is on path
-    api_dir = os.path.join(os.path.dirname(__file__), "..", "api")
-    sys.path.insert(0, api_dir)
-
-    from index import app
-    return TestClient(app)
+    from api.index import app
+    return app.test_client()
 
 
 class TestHealthEndpoint:
@@ -228,64 +220,64 @@ class TestHealthEndpoint:
         assert r.status_code == 200
 
     def test_health_has_model_loaded_field(self, client):
-        data = client.get("/api/health").json()
+        data = client.get("/api/health").get_json()
         assert "model_loaded" in data
         assert "model_state" in data
         assert "version" in data
 
     def test_health_version_is_1_0_0(self, client):
-        data = client.get("/api/health").json()
+        data = client.get("/api/health").get_json()
         assert data["version"] == "1.0.0"
 
 
 class TestRiskTilesEndpoint:
     def test_small_bbox_returns_tiles(self, client):
-        r = client.get("/api/risk/tiles", params={
+        r = client.get("/api/risk/tiles", query_string={
             "min_lat": 37.0, "max_lat": 39.0,
             "min_lon": -122.0, "max_lon": -120.0,
             "tile_deg": 1.0,
         })
         assert r.status_code == 200
-        data = r.json()
+        data = r.get_json()
         assert "tiles" in data
         assert len(data["tiles"]) > 0
 
     def test_tiles_have_required_fields(self, client):
-        r = client.get("/api/risk/tiles", params={
+        r = client.get("/api/risk/tiles", query_string={
             "min_lat": 0, "max_lat": 2,
             "min_lon": 0, "max_lon": 2,
             "tile_deg": 1.0,
         })
-        data = r.json()
+        data = r.get_json()
         tile = data["tiles"][0]
         for key in ("id", "lat", "lon", "risk_score", "risk_tier", "color"):
             assert key in tile, f"Missing key: {key}"
 
     def test_risk_scores_in_range(self, client):
-        r = client.get("/api/risk/tiles", params={
+        r = client.get("/api/risk/tiles", query_string={
             "min_lat": 10, "max_lat": 15,
             "min_lon": 10, "max_lon": 15,
             "tile_deg": 1.0,
         })
-        data = r.json()
+        data = r.get_json()
         for tile in data["tiles"]:
             assert 0 <= tile["risk_score"] <= 100
 
     def test_invalid_bbox_returns_400(self, client):
-        r = client.get("/api/risk/tiles", params={
+        r = client.get("/api/risk/tiles", query_string={
             "min_lat": 50, "max_lat": 30,
             "min_lon": 0, "max_lon": 10,
         })
         assert r.status_code == 400
 
     def test_day_offset_parameter(self, client):
-        r = client.get("/api/risk/tiles", params={
+        r = client.get("/api/risk/tiles", query_string={
             "min_lat": 0, "max_lat": 2,
             "min_lon": 0, "max_lon": 2,
             "tile_deg": 1.0, "day_offset": 5,
         })
         assert r.status_code == 200
-        data = r.json()
+        data = r.get_json()
         assert data["day_offset"] == 5
 
 
@@ -293,28 +285,28 @@ class TestForecastEndpoint:
     def test_forecast_returns_10_days(self, client):
         r = client.get("/api/forecast/37.5/-122.0")
         assert r.status_code == 200
-        data = r.json()
+        data = r.get_json()
         assert len(data["forecast_days"]) == 10
 
     def test_forecast_day_structure(self, client):
         r = client.get("/api/forecast/37.5/-122.0")
-        data = r.json()
+        data = r.get_json()
         day = data["forecast_days"][0]
         for key in ("day", "date", "risk_score", "risk_tier", "color"):
             assert key in day
 
     def test_forecast_risk_scores_valid(self, client):
         r = client.get("/api/forecast/37.5/-122.0")
-        data = r.json()
+        data = r.get_json()
         for day in data["forecast_days"]:
             assert 0 <= day["risk_score"] <= 100
 
 
 class TestZoneDetailEndpoint:
     def test_zone_detail_returns_breakdown(self, client):
-        r = client.get("/api/risk/zone/test_zone", params={"lat": 37.5, "lon": -122.0})
+        r = client.get("/api/risk/zone/test_zone", query_string={"lat": 37.5, "lon": -122.0})
         assert r.status_code == 200
-        data = r.json()
+        data = r.get_json()
         assert "factor_breakdown" in data
         assert "raw_features" in data
         assert "risk_score" in data
@@ -322,21 +314,21 @@ class TestZoneDetailEndpoint:
 
 class TestWeatherEndpoint:
     def test_weather_returns_data(self, client):
-        r = client.get("/api/weather/current", params={"lat": 37.5, "lon": -122.0})
+        r = client.get("/api/weather/current", query_string={"lat": 37.5, "lon": -122.0})
         assert r.status_code == 200
-        data = r.json()
+        data = r.get_json()
         assert "temp" in data
         assert "humidity" in data
 
 
 class TestSearchEndpoint:
     def test_search_returns_results(self, client):
-        r = client.get("/api/search", params={"q": "California"})
+        r = client.get("/api/search", query_string={"q": "California"})
         # May succeed or 503 if geocoding is blocked in CI
         assert r.status_code in (200, 503)
 
     def test_search_short_query_rejected(self, client):
-        r = client.get("/api/search", params={"q": "A"})
+        r = client.get("/api/search", query_string={"q": "A"})
         assert r.status_code == 422
 
 
@@ -350,12 +342,11 @@ class TestUploadEndpoint:
                 "coordinates": [[[10, 20], [15, 20], [15, 25], [10, 25], [10, 20]]]
             }
         })
-        r = client.post(
-            "/api/maps/upload",
-            files={"file": ("test.geojson", geojson.encode(), "application/json")},
-        )
+        r = client.post("/api/maps/upload", data={
+            "file": (io.BytesIO(geojson.encode()), "test.geojson")
+        }, content_type="multipart/form-data")
         assert r.status_code == 200
-        data = r.json()
+        data = r.get_json()
         assert "job_id" in data
         assert data["status"] == "completed"
 
@@ -368,14 +359,13 @@ class TestUploadEndpoint:
                 "coordinates": [[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]
             }
         })
-        r1 = client.post(
-            "/api/maps/upload",
-            files={"file": ("test.geojson", geojson.encode(), "application/json")},
-        )
-        job_id = r1.json()["job_id"]
+        r1 = client.post("/api/maps/upload", data={
+            "file": (io.BytesIO(geojson.encode()), "test.geojson")
+        }, content_type="multipart/form-data")
+        job_id = r1.get_json()["job_id"]
         r2 = client.get(f"/api/maps/{job_id}/status")
         assert r2.status_code == 200
-        assert r2.json()["job_id"] == job_id
+        assert r2.get_json()["job_id"] == job_id
 
     def test_missing_job_returns_404(self, client):
         r = client.get("/api/maps/nonexistent-job/status")
@@ -390,7 +380,7 @@ class TestUploadEndpoint:
 class TestHeuristicScoring:
     def test_dry_hot_windy_scores_high(self):
         """High temp, low humidity, high wind → high risk."""
-        from routers.predict import _heuristic_scores
+        from api.routers.predict import _heuristic_scores
         # Hot (60°C), dry (5%), very windy (25 m/s), no rain for 14 days
         features = np.array([[
             0.1,   # ndvi — dry
@@ -413,7 +403,7 @@ class TestHeuristicScoring:
 
     def test_wet_cool_calm_scores_low(self):
         """Low temp, high humidity, low wind, recent rain → low risk."""
-        from routers.predict import _heuristic_scores
+        from api.routers.predict import _heuristic_scores
         features = np.array([[
             0.8,   # ndvi — lush
             0.7,   # evi
@@ -435,7 +425,7 @@ class TestHeuristicScoring:
 
     def test_scores_always_in_0_1(self):
         """All outputs must be clipped to [0, 1]."""
-        from routers.predict import _heuristic_scores
+        from api.routers.predict import _heuristic_scores
         np.random.seed(99)
         features = np.random.rand(100, 14).astype(np.float32)
         scores = _heuristic_scores(features)
@@ -443,7 +433,7 @@ class TestHeuristicScoring:
 
     def test_batch_scoring(self):
         """Should handle any batch size."""
-        from routers.predict import _heuristic_scores
+        from api.routers.predict import _heuristic_scores
         for n in [1, 5, 50, 200]:
             features = np.random.rand(n, 14).astype(np.float32)
             scores = _heuristic_scores(features)
