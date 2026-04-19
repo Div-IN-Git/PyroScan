@@ -834,16 +834,13 @@ const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.5, sizeAtten
 scene.add(new THREE.Points(starGeo2, starMat));
 
 // ── GLOBE WITH EARTH TEXTURE ──────────────────────────────────────────────── //
-// Use a free, CORS-friendly Earth texture from unpkg/NASA Blue Marble
 const textureLoader = new THREE.TextureLoader();
 
-// Natural Earth day texture — bright enough to see continents clearly
 const EARTH_TEXTURE_URL = 'https://unpkg.com/three-globe/example/img/earth-day.jpg';
 const EARTH_BUMP_URL    = 'https://unpkg.com/three-globe/example/img/earth-topology.png';
 
 const globeGeo = new THREE.SphereGeometry(1, 64, 64);
 
-// Start with a dark material while texture loads
 const globeMat = new THREE.MeshPhongMaterial({
   color: 0x0a1a30,
   emissive: 0x061020,
@@ -854,18 +851,16 @@ const globeMat = new THREE.MeshPhongMaterial({
 const globe = new THREE.Mesh(globeGeo, globeMat);
 scene.add(globe);
 
-// Load Earth texture asynchronously — swap in when ready
 textureLoader.load(
   EARTH_TEXTURE_URL,
   (texture) => {
     globeMat.map = texture;
-    globeMat.color.set(0xffffff);  // let texture provide the color
+    globeMat.color.set(0xffffff);
     globeMat.emissive.set(0x000000);
     globeMat.needsUpdate = true;
   },
   undefined,
   () => {
-    // Fallback 1: jsdelivr CDN
     textureLoader.load(
       'https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-day.jpg',
       (texture) => {
@@ -876,7 +871,6 @@ textureLoader.load(
       },
       undefined,
       () => {
-        // Fallback 2: NASA visible Earth from a reliable CORS-friendly source
         textureLoader.load(
           'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/planets/earth_atmos_2048.jpg',
           (texture) => {
@@ -887,19 +881,13 @@ textureLoader.load(
           },
           undefined,
           () => {
-            // Final fallback: draw continents with a canvas texture
             const earthCanvas = document.createElement('canvas');
             earthCanvas.width = 2048;
             earthCanvas.height = 1024;
             const ctx = earthCanvas.getContext('2d');
-
-            // Ocean — deep blue
             ctx.fillStyle = '#1a3a6e';
             ctx.fillRect(0, 0, 2048, 1024);
-
-            // Land — green/brown
             ctx.fillStyle = '#3a6b3a';
-
             function drawContinent(points) {
               ctx.beginPath();
               points.forEach(([lon, lat], i) => {
@@ -910,22 +898,13 @@ textureLoader.load(
               ctx.closePath();
               ctx.fill();
             }
-
-            // North America
             drawContinent([[-168,72],[-140,60],[-130,55],[-125,48],[-120,32],[-110,22],[-85,10],[-75,8],[-60,12],[-50,60],[-65,68],[-80,73],[-110,75],[-140,70],[-168,72]]);
-            // South America
             drawContinent([[-80,12],[-60,12],[-50,-5],[-35,-8],[-35,-25],[-50,-35],[-65,-55],[-70,-50],[-75,-40],[-75,-20],[-80,0],[-80,12]]);
-            // Europe
             drawContinent([[-10,35],[28,35],[35,45],[30,55],[25,65],[15,70],[-5,58],[-10,50],[-10,35]]);
-            // Africa
             drawContinent([[-18,15],[50,15],[50,-5],[40,-20],[30,-35],[20,-35],[10,-25],[5,-5],[0,5],[-18,15]]);
-            // Asia
             drawContinent([[25,40],[45,40],[60,25],[80,10],[100,5],[120,20],[135,35],[145,40],[140,55],[120,65],[90,75],[60,70],[40,60],[25,55],[25,40]]);
-            // Australia
             drawContinent([[115,-22],[130,-15],[140,-18],[150,-22],[150,-38],[130,-38],[115,-32],[115,-22]]);
-            // Greenland
             drawContinent([[-50,58],[-25,60],[-15,70],[-18,82],[-45,83],[-60,76],[-50,58]]);
-
             const tex = new THREE.CanvasTexture(earthCanvas);
             globeMat.map = tex;
             globeMat.color.set(0xffffff);
@@ -938,14 +917,12 @@ textureLoader.load(
   }
 );
 
-// Load bump map for terrain depth (optional, enhances realism)
 textureLoader.load(EARTH_BUMP_URL, (bumpTex) => {
   globeMat.bumpMap = bumpTex;
   globeMat.bumpScale = 0.05;
   globeMat.needsUpdate = true;
 });
 
-// Subtle grid lines on globe surface
 function addGlobeGrid() {
   const lineMat = new THREE.LineBasicMaterial({ color: 0x1a3a55, transparent: true, opacity: 0.25 });
   for (let lat = -80; lat <= 80; lat += 20) {
@@ -967,7 +944,6 @@ function addGlobeGrid() {
 }
 addGlobeGrid();
 
-// Atmosphere glow
 const atmGeo = new THREE.SphereGeometry(1.08, 32, 32);
 const atmMat = new THREE.MeshPhongMaterial({
   color: 0x1a5aff,
@@ -977,12 +953,10 @@ const atmMat = new THREE.MeshPhongMaterial({
 });
 scene.add(new THREE.Mesh(atmGeo, atmMat));
 
-// Lights — stronger ambient so the whole globe is visible, not just the sunlit side
 scene.add(new THREE.AmbientLight(0xaabbcc, 0.9));
 const sunLight = new THREE.DirectionalLight(0xffeedd, 0.8);
 sunLight.position.set(5, 3, 5);
 scene.add(sunLight);
-// Fill light from the opposite side so the dark hemisphere isn't pitch black
 const fillLight = new THREE.DirectionalLight(0x334466, 0.5);
 fillLight.position.set(-5, -2, -3);
 scene.add(fillLight);
@@ -990,7 +964,6 @@ const fireLight = new THREE.PointLight(0xff4400, 0.3, 10);
 fireLight.position.set(-2, 1, 2);
 scene.add(fireLight);
 
-// Risk tile meshes group
 const tilesGroup = new THREE.Group();
 scene.add(tilesGroup);
 
@@ -1011,7 +984,6 @@ function hexToThree(hex) {
 function createTileMesh(tile) {
   const { lat, lon, lat_size = 1, lon_size = 1, color = '#22c55e', risk_score = 0 } = tile;
   const intensity = risk_score / 100;
-  // Lift tiles slightly above the globe surface so they're visible over the texture
   const r = 1.004 + intensity * 0.006;
 
   const pts = [];
@@ -1044,10 +1016,9 @@ function createTileMesh(tile) {
     emissive: col,
     emissiveIntensity: 0.3 + intensity * 0.4,
     transparent: true,
-    // Higher opacity so tiles are clearly visible on top of the Earth texture
     opacity: 0.45 + intensity * 0.35,
     side: THREE.DoubleSide,
-    depthWrite: false,  // prevents z-fighting with globe surface
+    depthWrite: false,
   });
 
   const mesh = new THREE.Mesh(geo, mat);
@@ -1066,9 +1037,19 @@ function renderTiles(tiles) {
 // ── ORBIT CONTROLS ────────────────────────────────────────────────────────── //
 let isDragging = false, prevMouse = { x: 0, y: 0 };
 
-// Three.js SphereGeometry UV: lon=0 maps to the BACK of the sphere by default.
-// Adding Math.PI to the initial rotY brings lon=0 (Prime Meridian / Gulf of Guinea) to face front.
-const LON_OFFSET = Math.PI;
+// Three.js SphereGeometry UV mapping analysis:
+// The texture u=0 (left edge, lon=-180) maps to phi=0 on the sphere.
+// At phi=0: x=-cos(0)=-1, z=sin(0)=0 — this points to -X, not the camera.
+// At phi=PI/2 (u=0.25, lon=-90): z=+1 — this faces the camera (+Z) by default.
+// At phi=PI   (u=0.5,  lon=0):   x=+1, z=0 — texture center is at the SIDE.
+//
+// To bring lon=0 to face the camera, we need globe.rotation.y = -PI/2.
+// General formula: rotY = -(lon * PI/180) - PI/2
+//   i.e. LON_OFFSET = -PI/2
+//
+// Derived mathematically: z_world = sin(rotY + phi), where phi = lon*PI/180 + PI
+// Setting z_world=1: rotY = PI/2 - phi = PI/2 - lon*PI/180 - PI = -PI/2 - lon*PI/180  ✓
+const LON_OFFSET = -Math.PI / 2;
 
 let rotX = 0,        rotY = LON_OFFSET;
 let targetRotX = 0,  targetRotY = LON_OFFSET;
@@ -1348,15 +1329,19 @@ async function runSearch(q) {
   searchResults.classList.add('show');
 }
 
+// ── FLY TO ────────────────────────────────────────────────────────────────── //
 function flyTo(lat, lon, name) {
   searchResults.classList.remove('show');
   searchInput.value = name.split(',')[0];
   state.centre = { lat, lon };
-  // rotX: tilt globe by latitude (negative = tilt up for northern hemisphere)
-  // rotY: spin globe so the given longitude faces the camera.
-  //       LON_OFFSET (Math.PI) corrects for Three.js sphere UV mapping starting at the back.
-  targetRotX = -(lat * Math.PI / 180)+0.4;
-  targetRotY = (-(lon * Math.PI / 180) + LON_OFFSET)-5; 
+
+  // Bring (lat, lon) to face the camera.
+  // rotY = -(lon * PI/180) + LON_OFFSET   (LON_OFFSET=-PI/2 corrects Three.js UV)
+  // rotX = +atan(sin(lat * PI/180))        (positive = tilt north toward camera)
+  //   derivation: after rotY, target point is at z=1, y=sin(lat_rad)
+  //   we want y_world=0 so it's vertically centered: tan(rotX) = sin(lat_rad)
+  targetRotY = -(lon * Math.PI / 180) + LON_OFFSET;
+  targetRotX = Math.atan(Math.sin(lat * Math.PI / 180));
   autoRotate = false;
   showToast(`Flying to ${name.split(',')[0]}`);
 }
