@@ -35,9 +35,9 @@ class TileFeatures:
 
 
 class DataFetcher:
-    def fetch_features_sync(self, lat, lon, day_offset=0):
-        w = self._weather(lat, lon)
-        f = self._forecast(lat, lon, day_offset)
+    def fetch_features_sync(self, lat, lon, day_offset=0, use_live_data=True):
+        w = self._weather(lat, lon, use_live_data=use_live_data)
+        f = self._forecast(lat, lon, day_offset, use_live_data=use_live_data)
         t = self._terrain(lat, lon)
         v = self._vegetation(lat, lon)
         fmc = self._calc_fmc(w["temp"], w["humidity"], w["wind_speed"], f["precip_7d"])
@@ -50,10 +50,10 @@ class DataFetcher:
             historical_fire_count=self._hist_fire(lat, lon))
 
     def fetch_weather_sync(self, lat, lon):
-        return self._weather(lat, lon)
+        return self._weather(lat, lon, use_live_data=True)
 
-    def _weather(self, lat, lon):
-        if OWM_API_KEY:
+    def _weather(self, lat, lon, use_live_data=True):
+        if use_live_data and OWM_API_KEY:
             try:
                 r = req_lib.get("https://api.openweathermap.org/data/2.5/weather",
                     params={"lat": lat, "lon": lon, "appid": OWM_API_KEY, "units": "metric"}, timeout=6)
@@ -64,7 +64,9 @@ class DataFetcher:
             except Exception: pass
         return self._synth_weather(lat, lon)
 
-    def _forecast(self, lat, lon, day_offset):
+    def _forecast(self, lat, lon, day_offset, use_live_data=True):
+        if not use_live_data:
+            return self._synth_forecast(day_offset)
         try:
             r = req_lib.get("https://api.open-meteo.com/v1/forecast",
                 params={"latitude": lat, "longitude": lon,
