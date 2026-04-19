@@ -1,0 +1,11 @@
+env
+.venv
+__pycache__
+**/__pycache__
+api/__pycache__
+api/services/__pycache__
+api/routers/__pycache__
+.DS_Store
+PyroScan_PRD.docx
+wildfire_dataset.csv
+python
