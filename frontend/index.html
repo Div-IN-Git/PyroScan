@@ -257,43 +257,6 @@ body::after {
 }
 .layer-toggle.active + .layer-value { display:block; }
 
-.coord-calibration {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(255,255,255,0.08);
-}
-.coord-calibration-title {
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  color: var(--text-dim);
-  margin-bottom: 8px;
-  text-transform: uppercase;
-}
-.coord-calibration-row {
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:10px;
-  margin-bottom:8px;
-}
-.coord-calibration-row label {
-  font-size:11px;
-  color:var(--text);
-}
-.coord-calibration-row input {
-  width:78px;
-  background:rgba(8,12,24,0.65);
-  border:1px solid rgba(255,255,255,0.15);
-  color:var(--text);
-  border-radius:7px;
-  padding:3px 6px;
-  font-size:11px;
-}
-.coord-calibration-help {
-  font-size:10px;
-  color:var(--text-dim);
-}
-
 #legend-panel {
   position:fixed;
   right:20px;
@@ -733,19 +696,6 @@ body::after {
     <div class="layer-check"></div>
   </div>
   <div class="layer-value" id="val-wnd">— m/s</div>
-
-  <div class="coord-calibration">
-    <div class="coord-calibration-title">Coordinate Calibration</div>
-    <div class="coord-calibration-row">
-      <label for="coord-lat-offset">Lat offset (°)</label>
-      <input id="coord-lat-offset" type="number" min="-45" max="45" step="0.1" value="0">
-    </div>
-    <div class="coord-calibration-row">
-      <label for="coord-lon-offset">Lon offset (°)</label>
-      <input id="coord-lon-offset" type="number" min="-45" max="45" step="0.1" value="0">
-    </div>
-    <div class="coord-calibration-help">Tune these until search and globe coordinates line up.</div>
-  </div>
 </div>
 
 <div class="glass fade-up fade-up-3" id="legend-panel">
@@ -1045,9 +995,8 @@ const tilesGroup = new THREE.Group();
 scene.add(tilesGroup);
 
 function latLonToVec3(lat, lon, r = 1) {
-  const calibrated = getCalibratedLatLon(lat, lon);
-  const phi   = (90 - calibrated.lat) * (Math.PI / 180);
-  const theta = (calibrated.lon + 180) * (Math.PI / 180);
+  const phi   = (90 - lat) * (Math.PI / 180);
+  const theta = (lon + 180) * (Math.PI / 180);
   return new THREE.Vector3(
     -r * Math.sin(phi) * Math.cos(theta),
      r * Math.cos(phi),
@@ -1116,21 +1065,14 @@ function renderTiles(tiles) {
 
 // ── ORBIT CONTROLS ────────────────────────────────────────────────────────── //
 let isDragging = false, prevMouse = { x: 0, y: 0 };
-let rotX = 0, rotY = 0;
-let targetRotX = 0, targetRotY = 0;
+
+// Three.js SphereGeometry UV: lon=0 maps to the BACK of the sphere by default.
+// Adding Math.PI to the initial rotY brings lon=0 (Prime Meridian / Gulf of Guinea) to face front.
+const LON_OFFSET = Math.PI;
+
+let rotX = 0,        rotY = LON_OFFSET;
+let targetRotX = 0,  targetRotY = LON_OFFSET;
 let autoRotate = true;
-const coordinateCalibration = { latOffset: 0, lonOffset: 0 };
-
-function normaliseLon(lon) {
-  return ((lon + 540) % 360) - 180;
-}
-
-function getCalibratedLatLon(lat, lon) {
-  return {
-    lat: Math.max(-89.999, Math.min(89.999, lat + coordinateCalibration.latOffset)),
-    lon: normaliseLon(lon + coordinateCalibration.lonOffset),
-  };
-}
 
 canvas.addEventListener('mousedown', e => {
   isDragging = true; autoRotate = false;
@@ -1410,28 +1352,14 @@ function flyTo(lat, lon, name) {
   searchResults.classList.remove('show');
   searchInput.value = name.split(',')[0];
   state.centre = { lat, lon };
-
-  const calibrated = getCalibratedLatLon(lat, lon);
-  targetRotX = (calibrated.lat * Math.PI / 180);
-  targetRotY = -(calibrated.lon * Math.PI / 180);
-
+  // rotX: tilt globe by latitude (negative = tilt up for northern hemisphere)
+  // rotY: spin globe so the given longitude faces the camera.
+  //       LON_OFFSET (Math.PI) corrects for Three.js sphere UV mapping starting at the back.
+  targetRotX = -(lat * Math.PI / 180)+0.4;
+  targetRotY = (-(lon * Math.PI / 180) + LON_OFFSET)-5; 
   autoRotate = false;
   showToast(`Flying to ${name.split(',')[0]}`);
 }
-
-const latOffsetInput = document.getElementById('coord-lat-offset');
-const lonOffsetInput = document.getElementById('coord-lon-offset');
-
-function updateCoordinateCalibration() {
-  const latOffset = Number(latOffsetInput.value || 0);
-  const lonOffset = Number(lonOffsetInput.value || 0);
-  coordinateCalibration.latOffset = Number.isFinite(latOffset) ? latOffset : 0;
-  coordinateCalibration.lonOffset = Number.isFinite(lonOffset) ? lonOffset : 0;
-}
-
-latOffsetInput.addEventListener('input', updateCoordinateCalibration);
-lonOffsetInput.addEventListener('input', updateCoordinateCalibration);
-updateCoordinateCalibration();
 
 // ── DRAG & DROP ───────────────────────────────────────────────────────────── //
 const dropOverlay = document.getElementById('drop-overlay');
