@@ -1,7 +1,15 @@
 {
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index.py" },
-    { "source": "/frontend/(.*)", "destination": "/index.html" }
+    { "source": "/(.*)",     "destination": "/" }
   ],
+  "functions": {
+    "api/index.py": {
+      "runtime": "python3.11",
+      "maxDuration": 30
+    }
+  },
+  "buildCommand": null,
   "outputDirectory": "frontend"
 }
+
